@@ -6,6 +6,7 @@
  *
  * Copyright 2002-2003 Ximian, Inc (http://www.ximian.com)
  * Copyright 2004-2009 Novell, Inc (http://www.novell.com)
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
 #include "config.h"
@@ -68,6 +69,7 @@ mono_mb_new_base (MonoClass *klass, MonoWrapperType type)
 #ifndef DISABLE_JIT
 	mb->code_size = 40;
 	mb->code = (unsigned char *)g_malloc (mb->code_size);
+	mb->init_locals = TRUE;
 #endif
 	/* placeholder for the wrapper always at index 1 */
 	mono_mb_add_data (mb, NULL);
@@ -96,6 +98,12 @@ void
 mono_mb_free (MonoMethodBuilder *mb)
 {
 #ifndef DISABLE_JIT
+	GList *l;
+
+	for (l = mb->locals_list; l; l = l->next) {
+		/* Allocated in mono_mb_add_local () */
+		g_free (l->data);
+	}
 	g_list_free (mb->locals_list);
 	if (!mb->dynamic) {
 		g_free (mb->method);
@@ -148,7 +156,7 @@ mono_mb_create_method (MonoMethodBuilder *mb, MonoMethodSignature *signature, in
 		header->code = mb->code;
 
 		for (i = 0, l = mb->locals_list; l; l = l->next, i++) {
-			header->locals [i] = mono_metadata_type_dup (NULL, (MonoType*)l->data);
+			header->locals [i] = (MonoType*)l->data;
 		}
 	} else
 #endif
@@ -172,10 +180,16 @@ mono_mb_create_method (MonoMethodBuilder *mb, MonoMethodSignature *signature, in
 		memcpy ((char*)header->code, mb->code, mb->pos);
 
 		for (i = 0, l = mb->locals_list; l; l = l->next, i++) {
-			header->locals [i] = mono_metadata_type_dup (NULL, (MonoType*)l->data);
+			header->locals [i] = (MonoType*)l->data;
 		}
 #endif
 	}
+
+#ifndef DISABLE_JIT
+	/* Free the locals list so mono_mb_free () doesn't free the types twice */
+	g_list_free (mb->locals_list);
+	mb->locals_list = NULL;
+#endif
 
 	method->signature = signature;
 	if (!signature->hasthis)
@@ -189,7 +203,7 @@ mono_mb_create_method (MonoMethodBuilder *mb, MonoMethodSignature *signature, in
 
 	header->code_size = mb->pos;
 	header->num_locals = mb->locals;
-	header->init_locals = TRUE;
+	header->init_locals = mb->init_locals;
 
 	header->num_clauses = mb->num_clauses;
 	header->clauses = mb->clauses;
@@ -268,12 +282,19 @@ int
 mono_mb_add_local (MonoMethodBuilder *mb, MonoType *type)
 {
 	int res;
+	MonoType *t;
+
+	/*
+	 * Have to make a copy early since type might be sig->ret,
+	 * which is transient, see mono_metadata_signature_dup_internal_with_padding ().
+	 */
+	t = mono_metadata_type_dup (NULL, type);
 
 	g_assert (mb != NULL);
 	g_assert (type != NULL);
 
 	res = mb->locals;
-	mb->locals_list = g_list_append (mb->locals_list, type);
+	mb->locals_list = g_list_append (mb->locals_list, t);
 	mb->locals++;
 
 	return res;
@@ -550,7 +571,7 @@ mono_mb_emit_exception_full (MonoMethodBuilder *mb, const char *exc_nspace, cons
 {
 	MonoMethod *ctor = NULL;
 
-	MonoClass *mme = mono_class_from_name (mono_defaults.corlib, exc_nspace, exc_name);
+	MonoClass *mme = mono_class_load_from_name (mono_defaults.corlib, exc_nspace, exc_name);
 	mono_class_init (mme);
 	ctor = mono_class_get_method_from_name (mme, ".ctor", 0);
 	g_assert (ctor);

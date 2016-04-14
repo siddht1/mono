@@ -3682,7 +3682,7 @@ namespace Mono.CSharp {
 
 		public virtual MemberExpr ResolveMemberAccess (ResolveContext ec, Expression left, SimpleName original)
 		{
-			if (left != null && !ConditionalAccess && left.IsNull && TypeSpec.IsReferenceType (left.Type)) {
+			if (left != null && !ConditionalAccess && !ec.HasSet (ResolveContext.Options.NameOfScope) && left.IsNull && TypeSpec.IsReferenceType (left.Type)) {
 				ec.Report.Warning (1720, 1, left.Location,
 					"Expression will always cause a `{0}'", "System.NullReferenceException");
 			}
@@ -4704,8 +4704,14 @@ namespace Mono.CSharp {
 
 				// for each argument, the conversion to 'ct' should be no worse than 
 				// the conversion to 'bt'.
-				if (result == 2)
-					return false;
+				if (result == 2) {
+					better_at_least_one = false;
+
+					++j;
+					while (j < args_count && !args [j++].IsDefaultArgument) ;
+
+					break;
+				}
 
 				// for at least one argument, the conversion to 'ct' should be better than 
 				// the conversion to 'bt'.
@@ -4717,15 +4723,26 @@ namespace Mono.CSharp {
 				return true;
 
 			//
-			// Tie-breaking rules are applied only for equivalent parameter types
+			// LAMESPEC: Tie-breaking rules for not equivalent parameter types
 			//
 			if (!are_equivalent) {
 				//
-				// LAMESPEC: A candidate with less default parameters is still better when there
+				// A candidate with no default parameters is still better when there
 				// is no better expression conversion
 				//
-				if (candidate_pd.Count < best_pd.Count && !candidate_params && best_pd.FixedParameters [j].HasDefaultValue) {
-					return true;
+				if (candidate_pd.Count < best_pd.Count) {
+					if (!candidate_params && !candidate_pd.FixedParameters [j - j].HasDefaultValue) {
+						return true;
+					}
+				} else if (candidate_pd.Count == best_pd.Count) {
+					if (candidate_params)
+						return false;
+
+					if (!candidate_pd.FixedParameters [j - 1].HasDefaultValue && best_pd.FixedParameters [j - 1].HasDefaultValue)
+						return true;
+
+					if (candidate_pd.FixedParameters [j - 1].HasDefaultValue && best_pd.HasParams)
+						return true;
 				}
 
 				return false;
@@ -4746,7 +4763,7 @@ namespace Mono.CSharp {
 				var cand_param = candidate_pd.FixedParameters [j];
 				var best_param = best_pd.FixedParameters [j];
 
-				if (cand_param.HasDefaultValue != best_param.HasDefaultValue)
+				if (cand_param.HasDefaultValue != best_param.HasDefaultValue && (!candidate_pd.HasParams || !best_pd.HasParams))
 					return cand_param.HasDefaultValue;
 
 				defaults_ambiguity = true;
@@ -6059,6 +6076,12 @@ namespace Mono.CSharp {
 			ResolveInstanceExpression (rc, null);
 			DoBestMemberChecks (rc, constant);
 
+			if (rc.HasSet (ResolveContext.Options.NameOfScope)) {
+				eclass = ExprClass.Value;
+				type = constant.MemberType;
+				return this;
+			}
+
 			var c = constant.GetConstant (rc);
 
 			// Creates reference expression to the constant value
@@ -6537,6 +6560,8 @@ namespace Mono.CSharp {
 
 				ec.Emit (OpCodes.Ldsfld, spec);
 			} else {
+				var ca = ec.ConditionalAccess;
+
 				if (!prepared) {
 					if (conditional_access_receiver)
 						ec.ConditionalAccess = new ConditionalAccessContext (type, ec.DefineLabel ());
@@ -6562,6 +6587,7 @@ namespace Mono.CSharp {
 
 				if (conditional_access_receiver) {
 					ec.CloseConditionalAccess (type.IsNullableType && type != spec.MemberType ? type : null);
+					ec.ConditionalAccess = ca;
 				}
 			}
 

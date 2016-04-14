@@ -36,8 +36,8 @@ static sigset_t suspend_ack_signal_mask;
 //Can't avoid the circular dep on this. Will be gone pretty soon
 extern int mono_gc_get_suspend_signal (void);
 
-static int
-signal_search_alternative (int min_signal)
+int
+mono_threads_posix_signal_search_alternative (int min_signal)
 {
 #if !defined (SIGRTMIN)
 	g_error ("signal search only works with RTMIN");
@@ -88,7 +88,7 @@ suspend_signal_get (void)
 #else
 	static int suspend_signum = -1;
 	if (suspend_signum == -1)
-		suspend_signum = signal_search_alternative (-1);
+		suspend_signum = mono_threads_posix_signal_search_alternative (-1);
 	return suspend_signum;
 #endif /* SIGRTMIN */
 }
@@ -107,7 +107,7 @@ restart_signal_get (void)
 #else
 	static int resume_signum = -1;
 	if (resume_signum == -1)
-		resume_signum = signal_search_alternative (suspend_signal_get () + 1);
+		resume_signum = mono_threads_posix_signal_search_alternative (suspend_signal_get () + 1);
 	return resume_signum;
 #endif /* SIGRTMIN */
 }
@@ -127,7 +127,7 @@ abort_signal_get (void)
 #else
 	static int abort_signum = -1;
 	if (abort_signum == -1)
-		abort_signum = signal_search_alternative (restart_signal_get () + 1);
+		abort_signum = mono_threads_posix_signal_search_alternative (restart_signal_get () + 1);
 	return abort_signum;
 #endif /* SIGRTMIN */
 }
@@ -180,13 +180,6 @@ suspend_signal_handler (int _dummy, siginfo_t *info, void *context)
 	/* thread_state_init_from_sigctx return FALSE if the current thread is detaching and suspend can't continue. */
 	current->suspend_can_continue = ret;
 
-	/*
-	Block the restart signal.
-	We need to block the restart signal while posting to the suspend_ack semaphore or we race to sigsuspend,
-	which might miss the signal and get stuck.
-	*/
-	pthread_sigmask (SIG_BLOCK, &suspend_ack_signal_mask, NULL);
-
 	/* This thread is doomed, all we can do is give up and let the suspender recover. */
 	if (!ret) {
 		THREADS_SUSPEND_DEBUG ("\tThread is dying, failed to capture state %p\n", current);
@@ -195,11 +188,15 @@ suspend_signal_handler (int _dummy, siginfo_t *info, void *context)
 		/* We're done suspending */
 		mono_threads_notify_initiator_of_suspend (current);
 
-		/* Unblock the restart signal. */
-		pthread_sigmask (SIG_UNBLOCK, &suspend_ack_signal_mask, NULL);
-
 		goto done;
 	}
+
+	/*
+	Block the restart signal.
+	We need to block the restart signal while posting to the suspend_ack semaphore or we race to sigsuspend,
+	which might miss the signal and get stuck.
+	*/
+	pthread_sigmask (SIG_BLOCK, &suspend_ack_signal_mask, NULL);
 
 	/* We're done suspending */
 	mono_threads_notify_initiator_of_suspend (current);

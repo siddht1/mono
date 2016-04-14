@@ -7,6 +7,11 @@
 //   Miguel de Icaza
 //
 // (C) Novell, Inc 2004
+// (C) 2016 Xamarin Inc
+//
+// Missing features:
+// * Implement --cross, --local-targets, --list-targets, --no-auto-fetch
+// * concatenate target with package to form native binary
 //
 using System;
 using System.Diagnostics;
@@ -17,8 +22,8 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text;
 using IKVM.Reflection;
-
-
+using System.Linq;
+using System.Diagnostics;
 using System.Threading.Tasks;
 
 class MakeBundle {
@@ -36,10 +41,14 @@ class MakeBundle {
 	static string os_message = "";
 	static bool compress;
 	static bool nomain;
+	static string custom_main = null;
 	static bool? use_dos2unix = null;
 	static bool skip_scan;
 	static string ctor_func;
 	static bool quiet;
+	static bool custom_mode = true;
+	static string embedded_options = null;
+	static string runtime = null;
 	
 	static int Main (string [] args)
 	{
@@ -55,6 +64,15 @@ class MakeBundle {
 				Help ();
 				return 1;
 
+			case "--simple":
+				custom_mode = false;
+				autodeps = true;
+				break;
+				
+			case "--custom":
+				custom_mode = true;
+				break;
+				
 			case "-c":
 				compile_only = true;
 				break;
@@ -67,6 +85,20 @@ class MakeBundle {
 				output = args [++i];
 				break;
 
+			case "--options":
+				if (i+1 == top){
+					Help (); 
+					return 1;
+				}
+				embedded_options = args [++i];
+				break;
+			case "--runtime":
+				if (i+1 == top){
+					Help (); 
+					return 1;
+				}
+				runtime = args [++i];
+				break;
 			case "-oo":
 				if (i+1 == top){
 					Help (); 
@@ -94,12 +126,9 @@ class MakeBundle {
 			case "--keeptemp":
 				keeptemp = true;
 				break;
+				
 			case "--static":
 				static_link = true;
-				if (!quiet) {
-					Console.WriteLine ("Note that statically linking the LGPL Mono runtime has more licensing restrictions than dynamically linking.");
-					Console.WriteLine ("See http://www.mono-project.com/Licensing for details on licensing.");
-				}
 				break;
 			case "--config":
 				if (i+1 == top) {
@@ -133,6 +162,13 @@ class MakeBundle {
 				break;
 			case "--nomain":
 				nomain = true;
+				break;
+			case "--custom-main":
+				if (i+1 == top) {
+					Help ();
+					return 1;
+				}
+				custom_main = args [++i];
 				break;
 			case "--style":
 				if (i+1 == top) {
@@ -193,9 +229,11 @@ class MakeBundle {
 		foreach (string file in assemblies)
 			if (!QueueAssembly (files, file))
 				return 1;
-			
-		GenerateBundles (files);
-		//GenerateJitWrapper ();
+
+		if (custom_mode)
+			GenerateBundles (files);
+		else
+			GeneratePackage (files);
 		
 		return 0;
 	}
@@ -259,6 +297,138 @@ class MakeBundle {
 		}
 
 		ts.WriteLine ();
+	}
+
+	class PackageMaker {
+		Dictionary<string, Tuple<long,int>> locations = new Dictionary<string, Tuple<long,int>> ();
+		const int align = 4096;
+		Stream package;
+		
+		public PackageMaker (string output)
+		{
+			package = File.Create (output, 128*1024);
+			if (IsUnix){
+				File.SetAttributes (output, unchecked ((FileAttributes) 0x80000000));
+			}
+		}
+
+		public int AddFile (string fname)
+		{
+			using (Stream fileStream = File.OpenRead (fname)){
+				var ret = fileStream.Length;
+				
+				Console.WriteLine ("At {0:x} with input {1}", package.Position, fileStream.Length);
+				fileStream.CopyTo (package);
+				package.Position = package.Position + (align - (package.Position % align));
+
+				return (int) ret;
+			}
+		}
+		
+		public void Add (string entry, string fname)
+		{
+			var p = package.Position;
+			var size = AddFile (fname);
+			
+			locations [entry] = Tuple.Create(p, size);
+		}
+
+		public void AddString (string entry, string text)
+		{
+			var bytes = Encoding.UTF8.GetBytes (text);
+			locations [entry] = Tuple.Create (package.Position, bytes.Length);
+			package.Write (bytes, 0, bytes.Length);
+			package.Position = package.Position + (align - (package.Position % align));
+		}
+
+		public void Dump ()
+		{
+			foreach (var floc in locations.Keys){
+				Console.WriteLine ($"{floc} at {locations[floc]:x}");
+			}
+		}
+
+		public void WriteIndex ()
+		{
+			var indexStart = package.Position;
+			var binary = new BinaryWriter (package);
+
+			binary.Write (locations.Count);
+			foreach (var entry in from entry in locations orderby entry.Value.Item1 ascending select entry){
+				var bytes = Encoding.UTF8.GetBytes (entry.Key);
+				binary.Write (bytes.Length+1);
+				binary.Write (bytes);
+				binary.Write ((byte) 0);
+				binary.Write (entry.Value.Item1);
+				binary.Write (entry.Value.Item2);
+			}
+			binary.Write (indexStart);
+			binary.Write (Encoding.UTF8.GetBytes ("xmonkeysloveplay"));
+			binary.Flush ();
+		}
+		
+		public void Close ()
+		{
+			WriteIndex ();
+			package.Close ();
+			package = null;
+		}
+	}
+
+	static bool MaybeAddFile (PackageMaker maker, string code, string file)
+	{
+		if (file == null)
+			return true;
+		
+		if (!File.Exists (file)){
+			Console.Error.WriteLine ("The file {0} does not exist", file);
+			return false;
+		}
+		maker.Add (code, file);
+		return true;
+	}
+	
+	static bool GeneratePackage (List<string> files)
+	{
+		if (runtime == null){
+			if (IsUnix)
+				runtime = Process.GetCurrentProcess().MainModule.FileName;
+			else {
+				Console.Error.WriteLine ("You must specify at least one runtime with --runtime or --cross");
+				Environment.Exit (1);
+			}
+		}
+		if (!File.Exists (runtime)){
+			Console.Error.WriteLine ($"The specified runtime at {runtime} does not exist");
+			Environment.Exit (1);
+		}
+		
+		if (ctor_func != null){
+			Console.Error.WriteLine ("--static-ctor not supported with package bundling, you must use native compilation for this");
+			return false;
+		}
+		
+		var maker = new PackageMaker (output);
+		maker.AddFile (runtime);
+		
+		foreach (var url in files){
+			string fname = LocateFile (new Uri (url).LocalPath);
+			string aname = Path.GetFileName (fname);
+
+			maker.Add ("assembly:" + aname, fname);
+			if (File.Exists (fname + ".config"))
+				maker.Add ("config:" + aname, fname + ".config");
+		}
+		if (!MaybeAddFile (maker, "systemconfig:", config_file) || !MaybeAddFile (maker, "machineconfig:", machine_config_file))
+			return false;
+
+		if (config_dir != null)
+			maker.Add ("config_dir:", config_dir);
+		if (embedded_options != null)
+			maker.AddString ("options:", embedded_options);
+		maker.Dump ();
+		maker.Close ();
+		return true;
 	}
 	
 	static void GenerateBundles (List<string> files)
@@ -345,10 +515,12 @@ void          mono_register_config_for_assembly (const char* assembly_name, cons
 
 			// The non-parallel part
 			byte [] buffer = new byte [8192];
+			// everything other than a-zA-Z0-9_ needs to be escaped in asm symbols.
+			var symbolEscapeRE = new System.Text.RegularExpressions.Regex ("[^\\w_]");
 			foreach (var url in files) {
 				string fname = LocateFile (new Uri (url).LocalPath);
 				string aname = Path.GetFileName (fname);
-				string encoded = aname.Replace ("-", "_").Replace (".", "_");
+				string encoded = symbolEscapeRE.Replace (aname, "_");
 
 				if (prog == null)
 					prog = aname;
@@ -476,7 +648,7 @@ void          mono_register_config_for_assembly (const char* assembly_name, cons
 			string template = s.ReadToEnd ();
 			tc.Write (template);
 
-			if (!nomain) {
+			if (!nomain && custom_main == null) {
 				Stream template_main_stream = System.Reflection.Assembly.GetAssembly (typeof(MakeBundle)).GetManifestResourceStream ("template_main.c");
 				StreamReader st = new StreamReader (template_main_stream);
 				string maintemplate = st.ReadToEnd ();
@@ -502,37 +674,79 @@ void          mono_register_config_for_assembly (const char* assembly_name, cons
 
 				string compiler = GetEnv("CC", "cl.exe");
 				string winsdkPath = GetEnv("WINSDK", @"C:\Program Files (x86)\Windows Kits\8.1");
-				string vsPath = GetEnv("VSINCLUDE", @"C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC");
+				string vsPath = GetEnv("VSINCLUDE", @"C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC");
 				string monoPath = GetEnv("MONOPREFIX", @"C:\Program Files (x86)\Mono");
 
-				string[] includes = new string[] {winsdkPath + @"\Include\um", winsdkPath + @"\Include\shared", vsPath + @"\include", monoPath + @"\include\mono-2.0"};
+				string[] includes = new string[] {winsdkPath + @"\Include\um", winsdkPath + @"\Include\shared", vsPath + @"\include", monoPath + @"\include\mono-2.0", "." };
 				string[] libs = new string[] { winsdkPath + @"\Lib\winv6.3\um\x86" , vsPath + @"\lib" };
-				string monoFile;
+				var linkLibraries = new string[] {  "kernel32.lib",
+												"version.lib",
+												"Ws2_32.lib",
+												"Mswsock.lib",
+												"Psapi.lib",
+												"shell32.lib",
+												"OleAut32.lib",
+												"ole32.lib",
+												"winmm.lib",
+												"user32.lib",
+												"libvcruntime.lib",
+												"advapi32.lib",
+												"OLDNAMES.lib",
+												"libucrt.lib" };
+
+				string glue_obj = "mkbundle_glue.obj";
+				string monoLib;
+
+				if (static_link)
+					monoLib = LocateFile (monoPath + @"\lib\monosgen-2.0-static.lib");
+
+				else {
+					Console.WriteLine ("WARNING: Dynamically linking the Mono runtime on Windows is not a tested option.");
+					monoLib = LocateFile (monoPath + @"\lib\monosgen-2.0.lib");
+					LocateFile (monoPath + @"\lib\monosgen-2.0.dll"); // in this case, the .lib is just the import library, and the .dll is also needed
+				}
 
 				var compilerArgs = new List<string>();
+				compilerArgs.Add("/MT");
+
 				foreach (string include in includes)
 					compilerArgs.Add(String.Format ("/I {0}", quote (include)));
 
-				if (static_link)
-					monoFile = LocateFile (monoPath + @"\lib\monosgen-2.0.lib");
+				if (!nomain || custom_main != null) {
+					compilerArgs.Add(quote(temp_c));
+					compilerArgs.Add(quote(temp_o));
+					if (custom_main != null)
+						compilerArgs.Add(quote(custom_main));
+					compilerArgs.Add(quote(monoLib));
+					compilerArgs.Add("/link");
+					compilerArgs.Add("/NODEFAULTLIB");
+					compilerArgs.Add("/SUBSYSTEM:windows");
+					compilerArgs.Add("/ENTRY:mainCRTStartup");
+					compilerArgs.AddRange(linkLibraries);
+					compilerArgs.Add("/out:"+ output);
+
+					string cl_cmd = String.Format("{0} {1}", compiler, String.Join(" ", compilerArgs.ToArray()));
+					Execute (cl_cmd);
+				}
 				else
-					monoFile = LocateFile (monoPath + @"\lib\monosgen-2.0.dll");
+				{
+					// we are just creating a .lib
+					compilerArgs.Add("/c"); // compile only
+					compilerArgs.Add(temp_c);
+					compilerArgs.Add(String.Format("/Fo" + glue_obj)); // .obj output name
 
-				compilerArgs.Add("/MD");
-				compilerArgs.Add(temp_c);
-				compilerArgs.Add(temp_o);
-				compilerArgs.Add("/link");
+					string cl_cmd = String.Format("{0} {1}", compiler, String.Join(" ", compilerArgs.ToArray()));
+					Execute (cl_cmd);
 
-				if (nomain)
-					compilerArgs.Add("/NOENTRY");
-					compilerArgs.Add("/DLL");
-
-				foreach (string lib in libs)
-					compilerArgs.Add(String.Format ("/LIBPATH:{0}", quote(lib)));
-				compilerArgs.Add (quote(monoFile));
-
-				string cl_cmd = String.Format("{0} {1}", compiler, String.Join(" ", compilerArgs.ToArray()));
-				Execute (cl_cmd);
+					string librarian = GetEnv ("LIB", "lib.exe");
+					var librarianArgs = new List<string> ();
+					librarianArgs.Add (String.Format ("/out:{0}.lib" + output));
+					librarianArgs.Add (temp_o);
+					librarianArgs.Add (glue_obj);
+					librarianArgs.Add (monoLib);
+					string lib_cmd = String.Format("{0} {1}", librarian, String.Join(" ", librarianArgs.ToArray()));
+					Execute (lib_cmd);
+				}
 			}
 			else
 			{
@@ -550,7 +764,7 @@ void          mono_register_config_for_assembly (const char* assembly_name, cons
 						smonolib = "`pkg-config --variable=libdir mono-2`/libmono-2.0.a ";
 					else
 						smonolib = "-Wl,-Bstatic -lmono-2.0 -Wl,-Bdynamic ";
-					cmd = String.Format("{4} -o {2} -Wall `pkg-config --cflags mono-2` {0} {3} " +
+					cmd = String.Format("{4} -o '{2}' -Wall `pkg-config --cflags mono-2` {0} {3} " +
 						"`pkg-config --libs-only-L mono-2` " + smonolib +
 						"`pkg-config --libs-only-l mono-2 | sed -e \"s/\\-lmono-2.0 //\"` {1}",
 						temp_c, temp_o, output, zlib, cc);
@@ -558,7 +772,7 @@ void          mono_register_config_for_assembly (const char* assembly_name, cons
 				else
 				{
 
-					cmd = String.Format("{4} " + debugging + " -o {2} -Wall {0} `pkg-config --cflags --libs mono-2` {3} {1}",
+					cmd = String.Format("{4} " + debugging + " -o '{2}' -Wall {0} `pkg-config --cflags --libs mono-2` {3} {1}",
 						temp_c, temp_o, output, zlib, cc);
 				}
 				Execute (cmd);
@@ -708,24 +922,35 @@ void          mono_register_config_for_assembly (const char* assembly_name, cons
 	{
 		Console.WriteLine ("Usage is: mkbundle [options] assembly1 [assembly2...]\n\n" +
 				   "Options:\n" +
-				   "    -c                  Produce stub only, do not compile\n" +
-				   "    -o out              Specifies output filename\n" +
-				   "    -oo obj             Specifies output filename for helper object file\n" +
+				   "    --config F          Bundle system config file `F'\n" +
+				   "    --config-dir D      Set MONO_CFG_DIR to `D'\n" +
+				   "    --deps              Turns on automatic dependency embedding (default on simple)\n" +
 				   "    -L path             Adds `path' to the search path for assemblies\n" +
-				   "    --nodeps            Turns off automatic dependency embedding (default)\n" +
-				   "    --deps              Turns on automatic dependency embedding\n" +
+				   "    --machine-config F  Use the given file as the machine.config for the application.\n" +
+				   "    -o out              Specifies output filename\n" +
+				   "    --nodeps            Turns off automatic dependency embedding (default on custom)\n" +
+				   "    --skip-scan         Skip scanning assemblies that could not be loaded (but still embed them).\n" +
+				   "\n" + 
+				   "--simple   Simple mode does not require a C toolchain and can cross compile\n" + 
+				   "    --cross TARGET      Generates a binary for the given TARGET\n"+
+				   "    --local-targets     Lists locally available targets\n" +
+				   "    --list-targets [SERVER] Lists available targets on the remote server\n" +
+				   "    --no-auto-fetch     Prevents the tool from auto-fetching a TARGET\n" +
+				   "    --options OPTIONS   Embed the specified Mono command line options on target\n" +
+				   "    --runtime RUNTIME   Manually specifies the Mono runtime to use\n" + 
+				   "\n" +
+				   "--custom   Builds a custom launcher, options for --custom\n" +
+				   "    -c                  Produce stub only, do not compile\n" +
+				   "    -oo obj             Specifies output filename for helper object file\n" +
 				   "    --dos2unix[=true|false]\n" +
 				   "                        When no value provided, or when `true` specified\n" +
 				   "                        `dos2unix` will be invoked to convert paths on Windows.\n" +
 				   "                        When `--dos2unix=false` used, dos2unix is NEVER used.\n" +
 				   "    --keeptemp          Keeps the temporary files\n" +
-				   "    --config F          Bundle system config file `F'\n" +
-				   "    --config-dir D      Set MONO_CFG_DIR to `D'\n" +
-				   "    --machine-config F  Use the given file as the machine.config for the application.\n" +
 				   "    --static            Statically link to mono libs\n" +
 				   "    --nomain            Don't include a main() function, for libraries\n" +
+				   "	--custom-main C     Link the specified compilation unit (.c or .obj) with entry point/init code\n" +
 				   "    -z                  Compress the assemblies before embedding.\n" +
-				   "    --skip-scan         Skip scanning assemblies that could not be loaded (but still embed them).\n" +
 				   "    --static-ctor ctor  Add a constructor call to the supplied function.\n" +
 				   "                        You need zlib development headers and libraries.\n");
 	}

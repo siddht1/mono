@@ -1,7 +1,7 @@
 # Process this file with autoconf to produce a configure script.
 #AC_PREREQ([2.62])
 
-AC_INIT(mono, [4.3.2],
+AC_INIT(mono, [4.5.0],
         [http://bugzilla.xamarin.com/enter_bug.cgi?classification=Mono])
 
 AC_CONFIG_SRCDIR([README.md])
@@ -272,8 +272,6 @@ case "$host" in
 		need_link_unlink=yes
 		libmono_cflags="-D_REENTRANT"
 		libgc_threads=pthreads
-		# This doesn't seem to work on solaris/x86, but the configure test runs
-		with_tls=pthread
 		has_dtrace=yes
 		use_sigposix=yes
 		enable_solaris_tar_check=yes
@@ -546,7 +544,7 @@ if test x"$GCC" = xyes; then
 		if test "x$mono_cv_clang" = "xyes"; then
 	   	   # https://bugzilla.samba.org/show_bug.cgi?id=8118
 	   	   WARN="$WARN -Qunused-arguments"
-		   WARN="$WARN -Wno-unused-function -Wno-tautological-compare -Wno-parentheses-equality -Wno-self-assign -Wno-return-stack-address"
+		   WARN="$WARN -Wno-unused-function -Wno-tautological-compare -Wno-parentheses-equality -Wno-self-assign -Wno-return-stack-address -Wno-constant-logical-operand"
 		fi
 else
 	# The Sun Forte compiler complains about inline functions that access static variables
@@ -929,15 +927,8 @@ if test x$has_extension_module != xno ; then
 	AC_MSG_NOTICE([Enabling mono extension module.])
 fi
 
-AC_ARG_ENABLE(gsharedvt, [  --enable-gsharedvt Enable generic valuetype sharing], enable_gsharedvt=$enableval, enable_gsharedvt=no)
-if test x$enable_gsharedvt = xyes; then
-	AC_DEFINE(ENABLE_GSHAREDVT,1,[Gsharedvt])
-fi
-
-AC_ARG_ENABLE(native-types, [  --enable-native-types Enable native types], enable_native_types=$enableval, enable_native_types=no)
-if test x$enable_native_types = xyes; then
-	AC_DEFINE(MONO_NATIVE_TYPES,1,[native types])
-fi
+# Deprecated
+AC_ARG_ENABLE(gsharedvt, [  --enable-gsharedvt Enable generic valuetype sharing (Deprecated)], enable_gsharedvt=$enableval, enable_gsharedvt=no)
 
 AC_MSG_CHECKING(for visibility __attribute__)
 AC_COMPILE_IFELSE([
@@ -976,7 +967,7 @@ AC_ARG_WITH(libgc,   [  --with-gc=included,none  Controls the Boehm GC config, d
 AC_ARG_ENABLE(boehm, [  --disable-boehm            Disable the Boehm GC.], support_boehm=$enableval,support_boehm=${support_boehm:-yes})
 AM_CONDITIONAL(SUPPORT_BOEHM, test x$support_boehm = xyes)
 
-AC_ARG_ENABLE(parallel-mark, [  --enable-parallel-mark     Enables GC Parallel Marking], enable_parallel_mark=$enableval, enable_parallel_mark=$parallel_mark)
+AC_ARG_ENABLE(parallel-mark, [  --enable-parallel-mark     Enables Boehm GC Parallel Marking], enable_parallel_mark=$enableval, enable_parallel_mark=$parallel_mark)
 if test x$enable_parallel_mark = xyes; then
 	libgc_configure_args="$libgc_configure_args --enable-parallel-mark"
 fi
@@ -1083,6 +1074,7 @@ if test x$host_win32 = xno; then
 
 	dnl hires monotonic clock support
 	AC_SEARCH_LIBS(clock_gettime, rt)
+	AC_CHECK_FUNCS(clock_nanosleep)
 
 	dnl dynamic loader support
 	AC_CHECK_FUNC(dlopen, DL_LIB="",
@@ -1156,6 +1148,7 @@ if test x$host_win32 = xno; then
 	AC_CHECK_FUNCS(getrlimit)
 	AC_CHECK_FUNCS(prctl)
 
+	AC_CHECK_FUNCS(sched_getaffinity)
 	AC_CHECK_FUNCS(sched_setaffinity)
 	AC_CHECK_FUNCS(sched_getcpu)
 
@@ -2078,6 +2071,7 @@ if test x$host_win32 = xno; then
 	AC_CHECK_FUNCS(setpgid)
 	AC_CHECK_FUNCS(system)
 	AC_CHECK_FUNCS(fork execv execve)
+	AC_CHECK_FUNCS(accept4)
 	AC_CHECK_SIZEOF(size_t)
 	AC_CHECK_TYPES([blksize_t], [AC_DEFINE(HAVE_BLKSIZE_T)], , 
 		[#include <sys/types.h>
@@ -2089,6 +2083,8 @@ if test x$host_win32 = xno; then
 		 #include <unistd.h>])
 	AC_CHECK_TYPES([suseconds_t], [AC_DEFINE(HAVE_SUSECONDS_T)], ,
 		[#include <sys/time.h>])
+	AC_CHECK_TYPES([struct cmsghdr], [AC_DEFINE(HAVE_STRUCT_CMSGHDR)], ,
+		[#include <sys/socket.h>])
 	AC_CHECK_TYPES([struct flock], [AC_DEFINE(HAVE_STRUCT_FLOCK)], ,
 		[#include <unistd.h>
 		 #include <fcntl.h>])
@@ -2098,6 +2094,16 @@ if test x$host_win32 = xno; then
 		[#include <sys/socket.h>])
 	AC_CHECK_TYPES([struct pollfd], [AC_DEFINE(HAVE_STRUCT_POLLFD)], ,
 		[#include <sys/poll.h>])
+	AC_CHECK_TYPES([struct sockaddr], [AC_DEFINE(HAVE_STRUCT_SOCKADDR)], ,
+		[#include <sys/socket.h>])
+	AC_CHECK_TYPES([struct sockaddr_storage], [AC_DEFINE(HAVE_STRUCT_SOCKADDR_STORAGE)], ,
+		[#include <sys/socket.h>])
+	AC_CHECK_TYPES([struct sockaddr_in], [AC_DEFINE(HAVE_STRUCT_SOCKADDR_IN)], ,
+		[#include <netinet/in.h>])
+	AC_CHECK_TYPES([struct sockaddr_in6], [AC_DEFINE(HAVE_STRUCT_SOCKADDR_IN6)], ,
+		[#include <netinet/in.h>])
+	AC_CHECK_TYPES([struct sockaddr_un], [AC_DEFINE(HAVE_STRUCT_SOCKADDR_UN)], ,
+		[#include <sys/un.h>])
 	AC_CHECK_TYPES([struct stat], [AC_DEFINE(HAVE_STRUCT_STAT)], ,
 		[#include <sys/types.h>
 		 #include <sys/stat.h>
@@ -2310,6 +2316,9 @@ else
 		#include <winsock2.h>
 		#include <ws2tcpip.h>
 	], [
+		#ifndef inet_pton
+		(void) inet_pton;
+		#endif
 		inet_pton (0, NULL, NULL);
 	], [
 		# Yes, we have it...
@@ -2598,20 +2607,50 @@ if test "x$enable_llvm" = "xyes"; then
 
    if test "x$host_win32" = "xno"; then
 
+   # Should be something like '2.6' or '2.7svn'
+   llvm_version=`$LLVM_CONFIG --version`
+   llvm_api_version=`$LLVM_CONFIG --mono-api-version 2>/dev/null`
+   AC_MSG_CHECKING(LLVM version)
+   AC_MSG_RESULT($llvm_version $llvm_api_version)
+   if echo $llvm_version | grep -q 'mono'; then
+	  if test "x$enable_llvm_version_check" == "xyes"; then
+	  	 if test "$llvm_version" != "$expected_llvm_version"; then
+		 	AC_MSG_ERROR([Expected llvm version $expected_llvm_version, but llvm-config --version returned $llvm_version"])
+	  	 fi
+	  fi
+   else
+	  AC_MSG_ERROR([Compiling with stock LLVM is not supported, please use the Mono LLVM repo at https://github.com/mono/llvm, with the GIT branch which matches this version of mono, i.e. 'mono-2-10' for Mono 2.10.])
+   fi
+
    # The output of --cflags seems to include optimizations flags too
-   LLVM_CFLAGS=`$LLVM_CONFIG --cflags | sed -e 's/-O2//g' | sed -e 's/-O0//g' | sed -e 's/-fomit-frame-pointer//g' | sed -e 's/-fPIC//g'`
-   LLVM_CXXFLAGS=`$LLVM_CONFIG --cxxflags | sed -e 's/-O2//g' | sed -e 's/-O0//g' | sed -e 's/-fomit-frame-pointer//g' | sed -e 's/-fPIC//g'`
+   if test $llvm_api_version -gt 100; then
+   	  # The --cflags argument includes all kinds of warnings -pendantic etc.
+	  LLVM_CFLAGS="-I$with_llvm/include -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
+	  LLVM_CXXFLAGS="-I$with_llvm/include -std=c++11 -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
+   else
+	  LLVM_CFLAGS=`$LLVM_CONFIG --cflags | sed -e 's/-O2//g' | sed -e 's/-O0//g' | sed -e 's/-fomit-frame-pointer//g' | sed -e 's/-fPIC//g'`
+      LLVM_CXXFLAGS=`$LLVM_CONFIG --cxxflags | sed -e 's/-O2//g' | sed -e 's/-O0//g' | sed -e 's/-fomit-frame-pointer//g' | sed -e 's/-fPIC//g'`
+   fi
    # LLVM is compiled with -fno-rtti, so we need this too, since our classes inherit
    # from LLVM classes.
    LLVM_CXXFLAGS="$LLVM_CXXFLAGS -fno-rtti -fexceptions"
    LLVM_LDFLAGS=`$LLVM_CONFIG --ldflags`
    # This might include empty lines
    LLVM_SYSTEM_LIBS=`$LLVM_CONFIG --system-libs 2>/dev/null | grep -- -`
-   if test "x$host" != "x$target"; then
+   llvm_jit_supported=yes
+   llvm_jit_libs="jit mcjit $llvm_codegen"
+   if test $llvm_api_version -gt 100; then
+   	  # Based on llvm 3.9, only aot is currently supported
+      llvm_jit_libs="orcjit $llvm_codegen"
+   elif test "x$host" != "x$target"; then
       # No need for jit libs
-      LLVM_LIBS=`$LLVM_CONFIG --libs analysis core bitwriter`
-   else
-      LLVM_LIBS=`$LLVM_CONFIG --libs analysis core bitwriter jit mcjit $llvm_codegen`
+	  llvm_jit_supported=no
+      llvm_jit_libs=""
+   fi
+   LLVM_LIBS=`$LLVM_CONFIG --libs analysis core bitwriter $llvm_jit_libs`
+   if test "x$LLVM_LIBS" == "x"; then
+   	  echo "$LLVM_CONFIG --libs failed."
+	  exit 1
    fi
    LLVM_LIBS="$LLVM_LIBS $LLVM_LDFLAGS $LLVM_SYSTEM_LIBS"
    # The c++ standard library used by llvm doesn't show up in $LLVM_SYSTEM_LIBS so add it manually
@@ -2622,21 +2661,6 @@ if test "x$enable_llvm" = "xyes"; then
    fi
 
    expected_llvm_version="3.4svn-mono-mono/e656cac"
-
-   # Should be something like '2.6' or '2.7svn'
-   llvm_version=`$LLVM_CONFIG --version`
-   llvm_api_version=`$LLVM_CONFIG --mono-api-version 2>/dev/null`
-   AC_MSG_CHECKING(LLVM version)
-   AC_MSG_RESULT($llvm_version)
-   if echo $llvm_version | grep -q 'mono'; then
-	  if test "x$enable_llvm_version_check" == "xyes"; then
-	  	 if test "$llvm_version" != "$expected_llvm_version"; then
-	  	 	AC_MSG_ERROR([Expected llvm version $expected_llvm_version, but llvm-config --version returned $llvm_version"])
-	  	 fi
-	  fi
-   else
-	  AC_MSG_ERROR([Compiling with stock LLVM is not supported, please use the Mono LLVM repo at https://github.com/mono/llvm, with the GIT branch which matches this version of mono, i.e. 'mono-2-10' for Mono 2.10.])
-   fi
 
    else
        LLVM_CFLAGS="-I$with_llvm/include -DNDEBUG -D__NO_CTYPE_INLINE -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
@@ -3007,6 +3031,7 @@ if test "x$host" != "x$target"; then
 		arch_target=amd64;
 		AC_DEFINE(TARGET_AMD64, 1, [...])
 		AC_DEFINE(TARGET_PS4, 1, [...])
+		AC_DEFINE(DISABLE_HW_TRAPS, 1, [...])
 		CPPFLAGS="$CPPFLAGS"
 		# Can't use tls, since it depends on the runtime detection of tls offsets
 		# in mono-compiler.h
@@ -3069,6 +3094,45 @@ SPARC64)
 	AC_DEFINE(TARGET_SPARC64, 1, [...])
 	;;
 esac
+
+case "$HOST" in
+X86)
+	AC_DEFINE(HOST_X86, 1, [...])
+	;;
+AMD64)
+	AC_DEFINE(HOST_AMD64, 1, [...])
+	;;
+ARM)
+	AC_DEFINE(HOST_ARM, 1, [...])
+	;;
+ARM64)
+	AC_DEFINE(HOST_ARM64, 1, [...])
+	;;
+POWERPC)
+	AC_DEFINE(HOST_POWERPC, 1, [...])
+	;;
+POWERPC64)
+	AC_DEFINE(HOST_POWERPC, 1, [...])
+	AC_DEFINE(HOST_POWERPC64, 1, [...])
+	;;
+S390X)
+	AC_DEFINE(HOST_S390X, 1, [...])
+	;;
+MIPS)
+	AC_DEFINE(HOST_MIPS, 1, [...])
+	;;
+IA64)
+	AC_DEFINE(HOST_IA64, 1, [...])
+	;;
+SPARC)
+	AC_DEFINE(HOST_SPARC, 1, [...])
+	;;
+SPARC64)
+	AC_DEFINE(HOST_SPARC64, 1, [...])
+	;;
+esac
+
+
 
 dnl *************
 dnl *** VTUNE ***
@@ -3178,7 +3242,8 @@ dnl
 SGEN_DEFINES=
 AC_ARG_WITH(sgen, [  --with-sgen=yes,no             Extra Generational GC, default=yes],[buildsgen=$with_sgen],[buildsgen=yes])
 if test x$buildsgen = xyes; then
-   SGEN_DEFINES="-DHAVE_SGEN_GC -DHAVE_MOVING_COLLECTOR"
+   AC_DEFINE(HAVE_MOVING_COLLECTOR, 1, [Moving collector])
+   SGEN_DEFINES="-DHAVE_SGEN_GC"
    gc_msg="sgen and $gc_msg"
 fi
 AC_SUBST(SGEN_DEFINES)
@@ -3249,6 +3314,12 @@ AC_ARG_WITH([libgdiplus],
 
 # default install location
 libgdiplus_install_loc=libgdiplus${libsuffix}
+case "$host" in
+    *-*-*linux*)
+    libgdiplus_install_loc=libgdiplus${libsuffix}.0
+    ;;
+esac
+
 case $with_libgdiplus in
     no|installed)
     libgdiplus_loc=
@@ -3466,6 +3537,7 @@ AC_ARG_WITH(monotouch_watch, [  --with-monotouch_watch=yes,no   If you want to b
 AC_ARG_WITH(monotouch_tv,    [  --with-monotouch_tv=yes,no      If you want to build the Xamarin.TVOS assemblies (defaults to no)],   [], [with_monotouch_tv=no])
 AC_ARG_WITH(bitcode,         [  --with-bitcode=yes,no           If bitcode is enabled (defaults to no)],                              [], [with_bitcode=no])
 AC_ARG_WITH(xammac,          [  --with-xammac=yes,no            If you want to build the Xamarin.Mac assemblies (defaults to no)],    [], [with_xammac=no])
+AC_ARG_WITH(mobile_static,   [  --with-mobile_static=yes,no     If you want to build the mobile_static assemblies (defaults to no)],  [], [with_mobile_static=no])
 
 OPROFILE=no
 AC_ARG_WITH(oprofile,[  --with-oprofile=no,<oprofile install dir>   Enable oprofile support (defaults to no)],[
@@ -3512,12 +3584,34 @@ AC_ARG_WITH(cooperative_gc, [  --with-cooperative-gc=yes|no      Enable cooperat
 	fi
 ], [with_cooperative_gc=no])
 
-AC_ARG_WITH(checked_build, [  --with-checked-build=yes|no      Enable checked build (expensive asserts)) (defaults to no)],[
-	if test x$with_checked_build != xno ; then
-		AC_DEFINE(CHECKED_BUILD,1,[Enable checked build.])
-	fi
-], [with_checked_build=no])
+AC_ARG_ENABLE(checked_build, [  --enable-checked-build=LIST      To enable checked build (expensive asserts), configure with a comma-separated LIST of checked build modules and then include that same list in the environment variable MONO_CHECK_MODE at runtime. Recognized checked build modules: all, gc, metadata, thread],[
 
+	if test x$enable_checked_build != x ; then
+		AC_DEFINE(ENABLE_CHECKED_BUILD,1,[Enable checked build])
+	fi
+	for feature in `echo "$enable_checked_build" | sed -e "s/,/ /g"`; do
+		eval "mono_checked_build_test_enable_$feature='yes'"
+	done
+
+	if test "x$mono_checked_build_test_enable_all" = "xyes"; then
+		eval "mono_checked_build_test_enable_gc='yes'"
+		eval "mono_checked_build_test_enable_metadata='yes'"
+		eval "mono_checked_build_test_enable_thread='yes'"
+	fi
+
+	if test "x$mono_checked_build_test_enable_gc" = "xyes"; then
+		AC_DEFINE(ENABLE_CHECKED_BUILD_GC, 1, [Enable GC checked build])
+	fi
+
+	if test "x$mono_checked_build_test_enable_metadata" = "xyes"; then
+		AC_DEFINE(ENABLE_CHECKED_BUILD_METADATA, 1, [Enable metadata checked build])
+	fi
+
+	if test "x$mono_checked_build_test_enable_thread" = "xyes"; then
+		AC_DEFINE(ENABLE_CHECKED_BUILD_THREAD, 1, [Enable thread checked build])
+	fi
+
+], [])
 
 AC_CHECK_HEADER([malloc.h], 
 		[AC_DEFINE([HAVE_USR_INCLUDE_MALLOC_H], [1], 
@@ -3555,6 +3649,7 @@ if test x$cross_compiling = xyes -o x$enable_mcs_build = xno; then
    with_monotouch_watch=no
    with_monotouch_tv=no
    with_xammac=no
+   with_mobile_static=no
 fi
 
 if test x$DISABLE_MCS_DOCS = xyes; then
@@ -3580,6 +3675,7 @@ AM_CONDITIONAL(INSTALL_MONOTOUCH_WATCH, [test "x$with_monotouch_watch" != "xno"]
 AM_CONDITIONAL(INSTALL_MONOTOUCH_TV, [test "x$with_monotouch_tv" != "xno"])
 AM_CONDITIONAL(BITCODE, test "x$with_bitcode" = "xyes")
 AM_CONDITIONAL(INSTALL_XAMMAC, [test "x$with_xammac" != "xno"])
+AM_CONDITIONAL(INSTALL_MOBILE_STATIC, [test "x$with_mobile_static" != "xno"])
 
 AM_CONDITIONAL(MIPS_GCC, test ${TARGET}${ac_cv_prog_gcc} = MIPSyes)
 AM_CONDITIONAL(MIPS_SGI, test ${TARGET}${ac_cv_prog_gcc} = MIPSno)
@@ -3613,6 +3709,9 @@ AC_SUBST(arch_target)
 AC_SUBST(CFLAGS)
 AC_SUBST(CPPFLAGS)
 AC_SUBST(LDFLAGS)
+
+#This must always be defined when building the runtime
+AC_DEFINE(MONO_INSIDE_RUNTIME,1, [Disable banned functions from being used by the runtime])
 
 mono_build_root=`pwd`
 AC_SUBST(mono_build_root)
@@ -4000,6 +4099,7 @@ echo "
 	Xamarin.WatchOS: $with_monotouch_watch
 	Xamarin.TVOS:    $with_monotouch_tv
 	Xamarin.Mac:     $with_xammac
+	mobile_static:   $with_mobile_static
 	JNI support:     $jdk_headers_found
 	libgdiplus:      $libgdiplus_msg
 	zlib:            $zlib_msg

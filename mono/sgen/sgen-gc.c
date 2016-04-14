@@ -18,18 +18,7 @@
  * Copyright 2011 Xamarin, Inc.
  * Copyright (C) 2012 Xamarin Inc
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
- * License 2.0 as published by the Free Software Foundation;
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Library General Public
- * License 2.0 along with this library; if not, write to the Free
- * Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  *
  * Important: allocation provides always zeroed memory, having to do
  * a memset after allocation is deadly for performance.
@@ -245,6 +234,8 @@ static gboolean do_verify_nursery = FALSE;
 static gboolean do_dump_nursery_content = FALSE;
 static gboolean enable_nursery_canaries = FALSE;
 
+static gboolean precleaning_enabled = TRUE;
+
 #ifdef HEAVY_STATISTICS
 guint64 stat_objects_alloced_degraded = 0;
 guint64 stat_bytes_alloced_degraded = 0;
@@ -341,7 +332,6 @@ nursery_canaries_enabled (void)
  * ######################################################################
  */
 MonoCoopMutex gc_mutex;
-gboolean sgen_try_free_some_memory;
 
 #define SCAN_START_SIZE	SGEN_SCAN_START_SIZE
 
@@ -1056,6 +1046,7 @@ finish_gray_stack (int generation, ScanCopyContext ctx)
 	char *end_addr = generation == GENERATION_NURSERY ? sgen_get_nursery_end () : (char*)-1;
 	SgenGrayQueue *queue = ctx.queue;
 
+	binary_protocol_finish_gray_stack_start (sgen_timestamp (), generation);
 	/*
 	 * We copied all the reachable objects. Now it's the time to copy
 	 * the objects that were not referenced by the roots, but by the copied objects.
@@ -1084,6 +1075,12 @@ finish_gray_stack (int generation, ScanCopyContext ctx)
 		sgen_client_bridge_reset_data ();
 
 	/*
+	 * Mark all strong toggleref objects. This must be done before we walk ephemerons or finalizers
+	 * to ensure they see the full set of live objects.
+	 */
+	sgen_client_mark_togglerefs (start_addr, end_addr, ctx);
+
+	/*
 	 * Walk the ephemeron tables marking all values with reachable keys. This must be completely done
 	 * before processing finalizable objects and non-tracking weak links to avoid finalizing/clearing
 	 * objects that are in fact reachable.
@@ -1094,8 +1091,6 @@ finish_gray_stack (int generation, ScanCopyContext ctx)
 		sgen_drain_gray_stack (ctx);
 		++ephemeron_rounds;
 	} while (!done_with_ephemerons);
-
-	sgen_client_mark_togglerefs (start_addr, end_addr, ctx);
 
 	if (sgen_client_bridge_need_processing ()) {
 		/*Make sure the gray stack is empty before we process bridge objects so we get liveness right*/
@@ -1166,7 +1161,7 @@ finish_gray_stack (int generation, ScanCopyContext ctx)
 	sgen_client_clear_togglerefs (start_addr, end_addr, ctx);
 
 	TV_GETTIME (btv);
-	SGEN_LOG (2, "Finalize queue handling scan for %s generation: %ld usecs %d ephemeron rounds", generation_name (generation), TV_ELAPSED (atv, btv), ephemeron_rounds);
+	SGEN_LOG (2, "Finalize queue handling scan for %s generation: %lld usecs %d ephemeron rounds", generation_name (generation), TV_ELAPSED (atv, btv), ephemeron_rounds);
 
 	/*
 	 * handle disappearing links
@@ -1189,6 +1184,7 @@ finish_gray_stack (int generation, ScanCopyContext ctx)
 	g_assert (sgen_gray_object_queue_is_empty (queue));
 
 	sgen_gray_object_queue_trim_free_list (queue);
+	binary_protocol_finish_gray_stack_end (sgen_timestamp (), generation);
 }
 
 void
@@ -1390,7 +1386,7 @@ job_scan_major_mod_union_card_table (void *worker_data_untyped, SgenThreadPoolJo
 	ScanCopyContext ctx = CONTEXT_FROM_OBJECT_OPERATIONS (job_data->ops, sgen_workers_get_job_gray_queue (worker_data));
 
 	g_assert (concurrent_collection_in_progress);
-	major_collector.scan_card_table (TRUE, ctx);
+	major_collector.scan_card_table (CARDTABLE_SCAN_MOD_UNION, ctx);
 }
 
 static void
@@ -1401,7 +1397,20 @@ job_scan_los_mod_union_card_table (void *worker_data_untyped, SgenThreadPoolJob 
 	ScanCopyContext ctx = CONTEXT_FROM_OBJECT_OPERATIONS (job_data->ops, sgen_workers_get_job_gray_queue (worker_data));
 
 	g_assert (concurrent_collection_in_progress);
-	sgen_los_scan_card_table (TRUE, ctx);
+	sgen_los_scan_card_table (CARDTABLE_SCAN_MOD_UNION, ctx);
+}
+
+static void
+job_mod_union_preclean (void *worker_data_untyped, SgenThreadPoolJob *job)
+{
+	WorkerData *worker_data = (WorkerData *)worker_data_untyped;
+	ScanJob *job_data = (ScanJob*)job;
+	ScanCopyContext ctx = CONTEXT_FROM_OBJECT_OPERATIONS (job_data->ops, sgen_workers_get_job_gray_queue (worker_data));
+
+	g_assert (concurrent_collection_in_progress);
+
+	major_collector.scan_card_table (CARDTABLE_SCAN_MOD_UNION_PRECLEAN, ctx);
+	sgen_los_scan_card_table (CARDTABLE_SCAN_MOD_UNION_PRECLEAN, ctx);
 }
 
 static void
@@ -1544,14 +1553,9 @@ collect_nursery (SgenGrayQueue *unpin_queue, gboolean finish_up_concurrent_mark)
 
 	TV_GETTIME (atv);
 	time_minor_pinning += TV_ELAPSED (btv, atv);
-	SGEN_LOG (2, "Finding pinned pointers: %zd in %ld usecs", sgen_get_pinned_count (), TV_ELAPSED (btv, atv));
+	SGEN_LOG (2, "Finding pinned pointers: %zd in %lld usecs", sgen_get_pinned_count (), TV_ELAPSED (btv, atv));
 	SGEN_LOG (4, "Start scan with %zd pinned objects", sgen_get_pinned_count ());
 
-	/*
-	 * FIXME: When we finish a concurrent collection we do a nursery collection first,
-	 * as part of which we scan the card table.  Then, later, we scan the mod union
-	 * cardtable.  We should only have to do one.
-	 */
 	sj = (ScanJob*)sgen_thread_pool_job_alloc ("scan remset", job_remembered_set_scan, sizeof (ScanJob));
 	sj->ops = object_ops;
 	sgen_workers_enqueue_job (&sj->job, FALSE);
@@ -1559,11 +1563,9 @@ collect_nursery (SgenGrayQueue *unpin_queue, gboolean finish_up_concurrent_mark)
 	/* we don't have complete write barrier yet, so we scan all the old generation sections */
 	TV_GETTIME (btv);
 	time_minor_scan_remsets += TV_ELAPSED (atv, btv);
-	SGEN_LOG (2, "Old generation scan: %ld usecs", TV_ELAPSED (atv, btv));
+	SGEN_LOG (2, "Old generation scan: %lld usecs", TV_ELAPSED (atv, btv));
 
 	sgen_pin_stats_print_class_stats ();
-
-	sgen_drain_gray_stack (ctx);
 
 	/* FIXME: Why do we do this at this specific, seemingly random, point? */
 	sgen_client_collecting_minor (&fin_ready_queue, &critical_fin_queue);
@@ -1602,7 +1604,7 @@ collect_nursery (SgenGrayQueue *unpin_queue, gboolean finish_up_concurrent_mark)
 	sgen_client_binary_protocol_reclaim_end (GENERATION_NURSERY);
 	TV_GETTIME (btv);
 	time_minor_fragment_creation += TV_ELAPSED (atv, btv);
-	SGEN_LOG (2, "Fragment creation: %ld usecs, %lu bytes available", TV_ELAPSED (atv, btv), (unsigned long)fragment_total);
+	SGEN_LOG (2, "Fragment creation: %lld usecs, %lu bytes available", TV_ELAPSED (atv, btv), (unsigned long)fragment_total);
 
 	if (consistency_check_at_minor_collection)
 		sgen_check_major_refs ();
@@ -1703,7 +1705,7 @@ major_copy_or_mark_from_roots (size_t *old_next_pin_slot, CopyOrMarkFromRootsMod
 
 	sgen_client_pre_collection_checks ();
 
-	if (!concurrent) {
+	if (mode != COPY_OR_MARK_FROM_ROOTS_START_CONCURRENT) {
 		/* Remsets are not useful for a major collection */
 		remset.clear_cards ();
 	}
@@ -1714,8 +1716,20 @@ major_copy_or_mark_from_roots (size_t *old_next_pin_slot, CopyOrMarkFromRootsMod
 	sgen_init_pinning ();
 	SGEN_LOG (6, "Collecting pinned addresses");
 	pin_from_roots ((void*)lowest_heap_address, (void*)highest_heap_address, ctx);
-
+	if (mode == COPY_OR_MARK_FROM_ROOTS_FINISH_CONCURRENT) {
+		/* Pin cemented objects that were forced */
+		sgen_pin_cemented_objects ();
+	}
 	sgen_optimize_pin_queue ();
+	if (mode == COPY_OR_MARK_FROM_ROOTS_START_CONCURRENT) {
+		/*
+		 * Cemented objects that are in the pinned list will be marked. When
+		 * marking concurrently we won't mark mod-union cards for these objects.
+		 * Instead they will remain cemented until the next major collection,
+		 * when we will recheck if they are still pinned in the roots.
+		 */
+		sgen_cement_force_pinned ();
+	}
 
 	sgen_client_collecting_major_1 ();
 
@@ -1767,24 +1781,19 @@ major_copy_or_mark_from_roots (size_t *old_next_pin_slot, CopyOrMarkFromRootsMod
 
 	TV_GETTIME (btv);
 	time_major_pinning += TV_ELAPSED (atv, btv);
-	SGEN_LOG (2, "Finding pinned pointers: %zd in %ld usecs", sgen_get_pinned_count (), TV_ELAPSED (atv, btv));
+	SGEN_LOG (2, "Finding pinned pointers: %zd in %lld usecs", sgen_get_pinned_count (), TV_ELAPSED (atv, btv));
 	SGEN_LOG (4, "Start scan with %zd pinned objects", sgen_get_pinned_count ());
 
 	major_collector.init_to_space ();
 
-	/*
-	 * The concurrent collector doesn't move objects, neither on
-	 * the major heap nor in the nursery, so we can mark even
-	 * before pinning has finished.  For the non-concurrent
-	 * collector we start the workers after pinning.
-	 */
-	if (mode == COPY_OR_MARK_FROM_ROOTS_START_CONCURRENT) {
-		SGEN_ASSERT (0, sgen_workers_all_done (), "Why are the workers not done when we start or finish a major collection?");
-		sgen_workers_start_all_workers (object_ops);
-		gray_queue_enable_redirect (WORKERS_DISTRIBUTE_GRAY_QUEUE);
-	} else if (mode == COPY_OR_MARK_FROM_ROOTS_FINISH_CONCURRENT) {
+	SGEN_ASSERT (0, sgen_workers_all_done (), "Why are the workers not done when we start or finish a major collection?");
+	if (mode == COPY_OR_MARK_FROM_ROOTS_FINISH_CONCURRENT) {
 		if (sgen_workers_have_idle_work ()) {
-			sgen_workers_start_all_workers (object_ops);
+			/*
+			 * We force the finish of the worker with the new object ops context
+			 * which can also do copying. We need to have finished pinning.
+			 */
+			sgen_workers_start_all_workers (object_ops, NULL);
 			sgen_workers_join ();
 		}
 	}
@@ -1800,14 +1809,28 @@ major_copy_or_mark_from_roots (size_t *old_next_pin_slot, CopyOrMarkFromRootsMod
 
 	sgen_client_collecting_major_3 (&fin_ready_queue, &critical_fin_queue);
 
-	/*
-	 * FIXME: is this the right context?  It doesn't seem to contain a copy function
-	 * unless we're concurrent.
-	 */
-	enqueue_scan_from_roots_jobs (heap_start, heap_end, object_ops, mode == COPY_OR_MARK_FROM_ROOTS_START_CONCURRENT);
+	enqueue_scan_from_roots_jobs (heap_start, heap_end, object_ops, FALSE);
 
 	TV_GETTIME (btv);
 	time_major_scan_roots += TV_ELAPSED (atv, btv);
+
+	/*
+	 * We start the concurrent worker after pinning and after we scanned the roots
+	 * in order to make sure that the worker does not finish before handling all
+	 * the roots.
+	 */
+	if (mode == COPY_OR_MARK_FROM_ROOTS_START_CONCURRENT) {
+		if (precleaning_enabled) {
+			ScanJob *sj;
+			/* Mod union preclean job */
+			sj = (ScanJob*)sgen_thread_pool_job_alloc ("preclean mod union cardtable", job_mod_union_preclean, sizeof (ScanJob));
+			sj->ops = object_ops;
+			sgen_workers_start_all_workers (object_ops, &sj->job);
+		} else {
+			sgen_workers_start_all_workers (object_ops, NULL);
+		}
+		gray_queue_enable_redirect (WORKERS_DISTRIBUTE_GRAY_QUEUE);
+	}
 
 	if (mode == COPY_OR_MARK_FROM_ROOTS_FINISH_CONCURRENT) {
 		ScanJob *sj;
@@ -1832,11 +1855,6 @@ static void
 major_finish_copy_or_mark (CopyOrMarkFromRootsMode mode)
 {
 	if (mode == COPY_OR_MARK_FROM_ROOTS_START_CONCURRENT) {
-		/*
-		 * Prepare the pin queue for the next collection.  Since pinning runs on the worker
-		 * threads we must wait for the jobs to finish before we can reset it.
-		 */
-		sgen_workers_wait_for_jobs_finished ();
 		sgen_finish_pinning ();
 
 		sgen_pin_stats_reset ();
@@ -1977,6 +1995,7 @@ major_finish_collection (const char *reason, size_t old_next_pin_slot, gboolean 
 	time_major_fragment_creation += TV_ELAPSED (atv, btv);
 
 	binary_protocol_sweep_begin (GENERATION_OLD, !major_collector.sweeps_lazily);
+	sgen_memgov_major_pre_sweep ();
 
 	TV_GETTIME (atv);
 	time_major_free_bigobjs += TV_ELAPSED (btv, atv);
@@ -2157,12 +2176,12 @@ major_finish_concurrent_collection (gboolean forced)
  * LOCKING: The GC lock MUST be held.
  */
 void
-sgen_ensure_free_space (size_t size)
+sgen_ensure_free_space (size_t size, int generation)
 {
 	int generation_to_collect = -1;
 	const char *reason = NULL;
 
-	if (size > SGEN_MAX_SMALL_OBJ_SIZE) {
+	if (generation == GENERATION_OLD) {
 		if (sgen_need_major_collection (size)) {
 			reason = "LOS overflow";
 			generation_to_collect = GENERATION_OLD;
@@ -2764,7 +2783,7 @@ sgen_gc_init (void)
 			return;
 		case -1:
 			/* being inited by another thread */
-			g_usleep (1000);
+			mono_thread_info_usleep (1000);
 			break;
 		case 0:
 			/* we will init it */
@@ -2932,6 +2951,15 @@ sgen_gc_init (void)
 			}
 			if (!strcmp (opt, "no-cementing")) {
 				cement_enabled = FALSE;
+				continue;
+			}
+
+			if (!strcmp (opt, "precleaning")) {
+				precleaning_enabled = TRUE;
+				continue;
+			}
+			if (!strcmp (opt, "no-precleaning")) {
+				precleaning_enabled = FALSE;
 				continue;
 			}
 
@@ -3151,11 +3179,7 @@ sgen_gc_lock (void)
 void
 sgen_gc_unlock (void)
 {
-	gboolean try_free = sgen_try_free_some_memory;
-	sgen_try_free_some_memory = FALSE;
 	mono_coop_mutex_unlock (&gc_mutex);
-	if (try_free)
-		mono_thread_hazardous_try_free_some ();
 }
 
 void
@@ -3193,7 +3217,7 @@ sgen_stop_world (int generation)
 
 	SGEN_ASSERT (0, !world_is_stopped, "Why are we stopping a stopped world?");
 
-	binary_protocol_world_stopping (generation, sgen_timestamp (), (gpointer)mono_native_thread_id_get ());
+	binary_protocol_world_stopping (generation, sgen_timestamp (), (gpointer) (gsize) mono_native_thread_id_get ());
 
 	sgen_client_stop_world (generation);
 
@@ -3221,8 +3245,6 @@ sgen_restart_world (int generation, GGTimingInfo *timing)
 	world_is_stopped = FALSE;
 
 	binary_protocol_world_restarted (generation, sgen_timestamp ());
-
-	sgen_try_free_some_memory = TRUE;
 
 	if (sgen_client_bridge_need_processing ())
 		sgen_client_bridge_processing_finish (generation);

@@ -8,6 +8,7 @@
  *
  * Note: this profiler is completely unsafe wrt handling managed objects,
  * don't use and don't copy code from here.
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 #include "config.h"
 
@@ -195,7 +196,7 @@ static inline void print_report (const gchar *format, ...)
 	vfprintf (stdout, format, ap);
 	fprintf (stdout, "\n");
 	va_end (ap);
-	klass = mono_class_from_name (mono_get_corlib (), "System", "Environment");
+	klass = mono_class_load_from_name (mono_get_corlib (), "System", "Environment");
 	mono_class_init (klass);
 	prop = mono_class_get_property_from_name (klass, "StackTrace");
 	str = (MonoString*)mono_property_get_value (prop, NULL, NULL, NULL);

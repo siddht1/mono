@@ -721,19 +721,6 @@ mono_metadata_interfaces_from_typedef_full  (MonoImage             *image,
 											 MonoGenericContext    *context,
 											 MonoError *error);
 
-MonoArrayType *
-mono_metadata_parse_array_full              (MonoImage             *image,
-					     MonoGenericContainer  *container,
-					     const char            *ptr,
-					     const char           **rptr);
-
-MONO_API MonoType *
-mono_metadata_parse_type_full               (MonoImage             *image,
-					     MonoGenericContainer  *container,
-					     short                  opt_attrs,
-					     const char            *ptr,
-					     const char           **rptr);
-
 MONO_API MonoMethodSignature *
 mono_metadata_parse_method_signature_full   (MonoImage             *image,
 					     MonoGenericContainer  *generic_container,
@@ -745,7 +732,8 @@ mono_metadata_parse_method_signature_full   (MonoImage             *image,
 MONO_API MonoMethodHeader *
 mono_metadata_parse_mh_full                 (MonoImage             *image,
 					     MonoGenericContainer  *container,
-					     const char            *ptr);
+					     const char            *ptr,
+						 MonoError *error);
 
 gboolean
 mono_method_get_header_summary (MonoMethod *method, MonoMethodHeaderSummary *summary);
@@ -786,7 +774,7 @@ gboolean
 mono_metadata_generic_param_equal (MonoGenericParam *p1, MonoGenericParam *p2);
 
 void mono_dynamic_stream_reset  (MonoDynamicStream* stream);
-void mono_assembly_addref       (MonoAssembly *assembly);
+MONO_API void mono_assembly_addref       (MonoAssembly *assembly);
 void mono_assembly_load_friends (MonoAssembly* ass);
 gboolean mono_assembly_has_skip_verification (MonoAssembly* ass);
 

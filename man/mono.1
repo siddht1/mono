@@ -124,6 +124,16 @@ This is currently an experimental feature as it is not complete.
 This instructs Mono to precompile code that has historically not been
 precompiled with AOT.   
 .TP
+.I data-outfile=FILE.dll.aotdata
+.Sp
+This instructs the AOT code generator to output certain data
+constructs into a separate file.   This can reduce the executable
+images some five to twenty percent.   Developers need to then ship the
+resulting aotdata as a resource and register a hook to load the data
+on demand by using the 
+.I mono_install_load_aot_data_hook
+method.
+.TP
 .I direct-pinvoke
 .Sp
 When this option is specified, P/Invoke methods are invoked directly
@@ -131,6 +141,11 @@ instead of going through the operating system symbol lookup operation.
 .TP
 .I llvm-path=<PREFIX>
 Same for the llvm tools 'opt' and 'llc'.
+.TP
+.I gen-seq-points-file=FILE.msym
+Instructs the AOT compiler to generate offline sequence points .msym files.
+The path is optional, if none is passed then a .msym file will be generated
+next to the input assembly.
 .TP
 .I mtriple=<TRIPLE>
 Use the GNU style target triple <TRIPLE> to determine some code generation options, i.e.
@@ -602,6 +617,16 @@ Currently this option is only supported on Linux.
 The maintainer options are only used by those developing the runtime
 itself, and not typically of interest to runtime users or developers.
 .TP
+\fB--bisect=optimization:filename\fR
+This flag is used by the automatic optimization bug bisector.  It
+takes an optimization flag and a filename of a file containing a list
+of full method names, one per line.  When it compiles one of the
+methods in the file it will use the optimization given, in addition to
+the optimizations that are otherwise enabled.  Note that if the
+optimization is enabled by default, you should disable it with `-O`,
+otherwise it will just apply to every method, whether it's in the file
+or not.
+.TP
 \fB--break method\fR
 Inserts a breakpoint before the method whose name is `method'
 (namespace.class:methodname).  Use `Main' as method name to insert a
@@ -868,7 +893,9 @@ environment variable to limit the extent of the messages you get:
 If set, the log mask is changed to the set value. Possible values are
 "asm" (assembly loader), "type", "dll" (native library loader), "gc"
 (garbage collector), "cfg" (config file loader), "aot" (precompiler),
-"security" (e.g. Moonlight CoreCLR support) and "all". 
+"security" (e.g. Moonlight CoreCLR support), "threadpool" (thread pool generic), 
+"io-threadpool" (thread pool I/O), "io-layer" (I/O layer - sockets, handles, shared memory etc) 
+and "all". 
 The default value is "all". Changing the mask value allows you to display only 
 messages for a certain component. You can use multiple masks by comma 
 separating them. For example to see config file messages and assembly loader
@@ -1066,11 +1093,6 @@ been used extensively.   This option enabled the feature and allows us to
 find spots that need to be tuned for this mode of operation.   Alternatively,
 this mode can be enabled at compile time by using the --with-cooperative-gc
 flag when calling configure.
-.TP
-\fBMONO_ENABLE_SHM\fR
-Unix only: Enable support for cross-process handles.  Cross-process
-handles are used to expose process handles, thread handles, named
-mutexes, named events and named semaphores across Unix processes.
 .TP
 \fBMONO_ENV_OPTIONS\fR
 This environment variable allows you to pass command line arguments to
@@ -1486,24 +1508,6 @@ For a complete description of recommended practices for application
 deployment, see
 http://www.mono-project.com/docs/getting-started/application-deployment/
 .TP
-\fBMONO_RTC\fR
-Experimental RTC support in the statistical profiler: if the user has
-the permission, more accurate statistics are gathered.  The MONO_RTC
-value must be restricted to what the Linux rtc allows: power of two
-from 64 to 8192 Hz. To enable higher frequencies like 4096 Hz, run as root:
-.nf
-
-	echo 4096 > /proc/sys/dev/rtc/max-user-freq
-
-.fi
-.Sp
-For example:
-.nf
-
-	MONO_RTC=4096 mono --profiler=default:stat program.exe
-
-.fi
-.TP 
 \fBMONO_SHARED_DIR\fR
 If set its the directory where the ".wapi" handle state is stored.
 This is the directory where the Windows I/O Emulation layer stores its
@@ -1611,6 +1615,10 @@ option.
 When this option is set, the runtime will invalidate the domain memory
 pool instead of destroying it.
 .TP
+\fBdisable_omit_fp\fR
+Disables a compiler optimization where the frame pointer is omitted
+from the stack. This optimization can interact badly with debuggers.
+.TP
 \fBdont-free-domains\fR
 This is an Optimization for multi-AppDomain applications (most
 commonly ASP.NET applications).  Due to internal limitations Mono,
@@ -1704,7 +1712,7 @@ since a live process contains more information than a core file.
 This option will suspend the program when an exception occurs.
 .TP
 \fBsuspend-on-unhandled\fR
-This option will suspend the program when an unhadled exception occurs.
+This option will suspend the program when an unhandled exception occurs.
 .ne
 .RE
 .TP
@@ -1777,6 +1785,10 @@ for example, to see managed frame names on gdb backtraces.
 Enables the maximum JIT verbosity for the specified method. This is
 very helpfull to diagnose a miscompilation problems of a specific
 method.
+.TP
+\fBMONO_JIT_DUMP_METHOD\fR
+Enables sending of the JITs intermediate representation for a specified
+method to the IdealGraphVisualizer tool.
 .TP
 \fBMONO_VERBOSE_HWCAP\fR
 If set, makes the JIT output information about detected CPU features

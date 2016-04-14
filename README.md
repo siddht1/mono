@@ -3,6 +3,8 @@ create cross platform applications.  It is an open source
 implementation of Microsoft's .NET Framework based on the ECMA
 standards for C# and the Common Language Runtime.
 
+The Mono project is part of the [.NET Foundation](http://www.dotnetfoundation.org/)
+
 [![Gitter](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/mono/mono?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 1. [Compilation and Installation](#compilation-and-installation)
@@ -104,6 +106,8 @@ See the man pages for mono(1), mcs(1) and monodis(1) for further details.
 Directory Roadmap
 =================
 
+* `acceptance-tests/` - Optional third party test suites used to validate Mono against a wider range of test cases.
+
 * `data/` - Configuration files installed as part of the Mono runtime.
 
 * `docs/` - Technical documents about the Mono runtime.
@@ -181,7 +185,7 @@ while `mono-sgen` uses the Simple Generational GC.
 * `--with-gc=[included, boehm, none]` - Selects the default Boehm
 garbage collector engine to use.
 
-  * *included*: (*slighty modified Boehm GC*) This is the default
+  * *included*: (*slightly modified Boehm GC*) This is the default
 value for the Boehm GC, and it's the most feature complete, it will
 allow Mono to use typed allocations and support the debugger.
 
@@ -194,6 +198,13 @@ Disables the inclusion of a garbage collector.
 
   * This defaults to `included`.
 
+* `--with-cooperative-gc`
+
+  * If you pass this flag the Mono runtime is configured to only use
+  the cooperative mode of the garbage collector.  If you do not pass
+  this flag, then you can control at runtime the use of the
+  cooperative GC mode by setting the `MONO_ENABLE_COOP` flag.
+  
 * `--with-tls=__thread,pthread`
 
   * Controls how Mono should access thread local storage,
@@ -419,8 +430,10 @@ cycle.
 multiple CPUs to do its work.  This helps performance
 on multi-CPU machines as the work is divided across CPUS.
 
-  * This option is not currently the default as we have
-not done much testing with Mono.
+  * This option is not currently the default on OSX
+as it runs into issues there.
+
+  * This option only applies to the Boehm GC.
 
 * `--enable-dtrace`
 
@@ -496,3 +509,15 @@ to do at all), first edit `.gitmodules` to point to the new location, then:
 The desired output diff is a change in `.gitmodules` to reflect the
 change in the remote URL, and a change in /<submodule> where you see
 the desired change in the commit hash.
+
+License
+=======
+
+See the LICENSE file for licensing information, and the PATENTS.TXT
+file for information about Microsoft's patent grant.
+
+Mono Trademark Use Policy
+=======
+
+The use of trademarks and logos for Mono can be found [here] (http://www.dotnetfoundation.org/legal/mono-tm). 
+

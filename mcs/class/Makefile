@@ -14,7 +14,9 @@ build_SUBDIRS :=  \
 	System.XML \
 	System Mono.Security \
 	Mono.Posix \
-	System.Core
+	System.Core \
+	Mono.Cecil \
+	Mono.Cecil.Mdb
 
 pcl_facade_dirs := Facades
 
@@ -53,8 +55,8 @@ mobile_common_dirs := \
 	Mono.CSharp	\
 	Microsoft.CSharp \
 	Mono.Security.Providers.DotNet	\
-	Mono.Security.Providers.OldTls \
-	Mono.Security.Providers.NewSystemSource
+	Mono.Security.Providers.NewSystemSource \
+	Mono.Security.Providers.NewTls
 
 mobile_static_dirs := \
 	$(mobile_common_dirs)	\
@@ -133,6 +135,7 @@ xammac_4_5_dirs := \
 	Mono.Security.Providers.DotNet \
 	Mono.Security.Providers.OldTls \
 	Mono.Security.Providers.NewSystemSource \
+	Mono.Security.Providers.NewTls \
 	$(pcl_facade_dirs)
 
 net_4_x_dirs := \
@@ -217,7 +220,9 @@ net_4_x_dirs := \
 	System.Net.Http.Formatting \
 	System.Web.Http \
 	System.Web.Http.SelfHost \
-	System.Web.Http.WebHost
+	System.Web.Http.WebHost \
+	Mono.Security.Providers.NewSystemSource \
+	Mono.Security.Providers.NewTls
 
 # These are the subdirs which depends on libs in net_4_x_dirs
 # or have proper dependencies between each other
@@ -262,7 +267,6 @@ net_4_x_parallel_dirs := \
 	System.Xml.Serialization \
 	Mono.Security.Providers.DotNet \
 	Mono.Security.Providers.OldTls \
-	Mono.Security.Providers.NewSystemSource \
 	System.DirectoryServices.Protocols	\
 	RabbitMQ.Client			\
 	Microsoft.VisualC		\
@@ -324,11 +328,14 @@ DISTFILES = \
 	notes/BitVecto32.txt	\
 	MicrosoftAjaxLibrary/License.htm	\
 	test-helpers/NetworkHelpers.cs	\
+	test-helpers/SocketResponder.cs	\
 	$(monolite_files)
 
 .PHONY: all-local $(STD_TARGETS:=-local)
 all-local $(STD_TARGETS:=-local):
 	@:
+
+all-local-aot:
 
 # Files needed to bootstrap C# compiler
 basic_files = basic.exe mscorlib.dll System.dll System.Xml.dll Mono.Security.dll System.Core.dll System.Security.dll System.Configuration.dll

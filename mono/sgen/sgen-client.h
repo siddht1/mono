@@ -3,18 +3,7 @@
  *
  * Copyright (C) 2014 Xamarin Inc
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
- * License 2.0 as published by the Free Software Foundation;
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Library General Public
- * License 2.0 along with this library; if not, write to the Free
- * Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
 #include "mono/sgen/sgen-pointer-queue.h"
@@ -105,7 +94,7 @@ void sgen_client_ensure_weak_gchandles_accessible (void);
  * parts of the object based on which cards are marked, do so and return TRUE.  Otherwise,
  * return FALSE.
  */
-gboolean sgen_client_cardtable_scan_object (GCObject *obj, mword block_obj_size, guint8 *cards, gboolean mod_union, ScanCopyContext ctx);
+gboolean sgen_client_cardtable_scan_object (GCObject *obj, mword block_obj_size, guint8 *cards, ScanCopyContext ctx);
 
 /*
  * Called after nursery objects have been pinned.  No action is necessary.
@@ -139,14 +128,6 @@ void sgen_client_degraded_allocation (size_t size);
  * is necessary.
  */
 void sgen_client_total_allocated_heap_changed (size_t allocated_heap_size);
-
-/*
- * Called when an object allocation fails.  The suggested action is to abort the program.
- *
- * FIXME: Don't we want to return a BOOL here that indicates whether to retry the
- * allocation?
- */
-void sgen_client_out_of_memory (size_t size);
 
 /*
  * If the client has registered any internal memory types, this must return a string

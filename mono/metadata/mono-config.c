@@ -7,6 +7,7 @@
  *
  * Copyright 2002-2003 Ximian, Inc (http://www.ximian.com)
  * Copyright 2004-2009 Novell, Inc (http://www.novell.com)
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 #include "config.h"
 #include <glib.h>
@@ -285,8 +286,8 @@ dllmap_start (gpointer user_data,
 					char *result;
 					
 					result = (char *)g_malloc (libdir_len-strlen("$mono_libdir")+strlen(attribute_values[i])+1);
-					strncpy (result, attribute_names[i], p-attribute_values[i]);
-					strcat (result, libdir);
+					strncpy (result, attribute_values[i], p-attribute_values[i]);
+					strcpy (result+(p-attribute_values[i]), libdir);
 					strcat (result, p+strlen("$mono_libdir"));
 					info->target = result;
 				} else 

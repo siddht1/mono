@@ -10,18 +10,7 @@
  * Copyright 2011 Xamarin, Inc.
  * Copyright (C) 2012 Xamarin Inc
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
- * License 2.0 as published by the Free Software Foundation;
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Library General Public
- * License 2.0 along with this library; if not, write to the Free
- * Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
 #include "config.h"
@@ -505,7 +494,6 @@ find_pinning_ref_from_thread (char *obj, size_t size)
 {
 #ifndef SGEN_WITHOUT_MONO
 	int j;
-	SgenThreadInfo *info;
 	char *endobj = obj + size;
 
 	FOREACH_THREAD (info) {
@@ -527,8 +515,8 @@ find_pinning_ref_from_thread (char *obj, size_t size)
 
 			if (w >= (mword)obj && w < (mword)obj + size)
 				SGEN_LOG (0, "Object %p referenced in saved reg %d of thread %p (id %p)", obj, j, info, (gpointer)mono_thread_info_get_tid (info));
-		} END_FOREACH_THREAD
-	}
+		}
+	} FOREACH_THREAD_END
 #endif
 }
 

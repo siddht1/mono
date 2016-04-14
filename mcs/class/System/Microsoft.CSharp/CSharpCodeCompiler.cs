@@ -366,7 +366,7 @@ namespace Mono.CSharp
 				}
 			}
 
-			args.Append("/sdk:4.5");
+			args.Append ("/noconfig ");
 
 			args.Append (" -- ");
 			foreach (string source in fileNames)

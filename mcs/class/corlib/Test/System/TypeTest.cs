@@ -16,7 +16,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
-#if !MONOTOUCH
+#if !MONOTOUCH && !MOBILE_STATIC
 using System.Reflection.Emit;
 #endif
 using System.Runtime.InteropServices;
@@ -261,7 +261,7 @@ namespace MonoTests.System
 	[TestFixture]
 	public class TypeTest
 	{
-#if !MONOTOUCH
+#if !MONOTOUCH && !MOBILE_STATIC
 		private ModuleBuilder module;
 #endif
 		const string ASSEMBLY_NAME = "MonoTests.System.TypeTest";
@@ -272,7 +272,7 @@ namespace MonoTests.System
 		{
 			AssemblyName assemblyName = new AssemblyName ();
 			assemblyName.Name = ASSEMBLY_NAME;
-#if !MONOTOUCH
+#if !MONOTOUCH && !MOBILE_STATIC
 			var assembly = AppDomain.CurrentDomain.DefineDynamicAssembly (
 					assemblyName, AssemblyBuilderAccess.RunAndSave, Path.GetTempPath ());
 			module = assembly.DefineDynamicModule ("module1");
@@ -3091,7 +3091,7 @@ namespace MonoTests.System
 		}
 
 		[Test]
-#if MONOTOUCH
+#if MONOTOUCH || MOBILE_STATIC
 		[ExpectedException (typeof (NotSupportedException))]
 #endif
 		public void MakeGenericType_UserDefinedType ()
@@ -3108,7 +3108,7 @@ namespace MonoTests.System
 		}
 
 		[Test]
-#if MONOTOUCH
+#if MONOTOUCH || MOBILE_STATIC
 		[ExpectedException (typeof (NotSupportedException))]
 #endif
 		public void MakeGenericType_NestedUserDefinedType ()
@@ -3125,7 +3125,7 @@ namespace MonoTests.System
 		}
 		
 		[Test]
-#if MONOTOUCH
+#if MONOTOUCH || MOBILE_STATIC
 		[ExpectedException (typeof (NotSupportedException))]
 #endif
 		public void TestMakeGenericType_UserDefinedType_DotNet20SP1 () 
@@ -3138,7 +3138,7 @@ namespace MonoTests.System
 		}
 		
 		[Test]
-#if MONOTOUCH
+#if MONOTOUCH || MOBILE_STATIC
 		[ExpectedException (typeof (NotSupportedException))]
 #endif
 		public void MakeGenericType_BadUserType ()
@@ -3274,7 +3274,7 @@ namespace MonoTests.System
 			Assert.AreEqual (t1, t2);
 		}
 
-#if !MONOTOUCH
+#if !MONOTOUCH && !MOBILE_STATIC
 		[Test]
 		public void SpaceAfterComma () {
 			string strType = "System.Collections.Generic.Dictionary`2[[System.Int32,mscorlib], [System.String,mscorlib]],mscorlib";
@@ -3282,7 +3282,7 @@ namespace MonoTests.System
 		}
 #endif
 
-#if !MONOTOUCH
+#if !MONOTOUCH && !MOBILE_STATIC
 		[Test]
 		public void Bug506757 ()
 		{
@@ -4059,15 +4059,25 @@ namespace MonoTests.System
 			} catch (ArgumentNullException) {}
 		}
 
-		void MustAE (string tname) {
+		void MustAE_general (string tname, Func<string,Type> getType) {
 			try {
-				var res = Type.GetType (tname, name => {
-					return Assembly.Load (name);
-				},(asm,name,ignore) => {
-					return (object)asm == null ? Type.GetType (name, false, ignore) : asm.GetType (name, false, ignore);
-				}, true, false);
+				var res = getType (tname);
 				Assert.Fail (tname);
 			} catch (ArgumentException) {}
+		}
+
+		void MustAE (string typename) {
+			MustAE_general (typename, tname => {
+					return Type.GetType (tname, name => {
+							return Assembly.Load (name);
+						},(asm,name,ignore) => {
+							return (object)asm == null ? Type.GetType (name, false, ignore) : asm.GetType (name, false, ignore);
+						}, true, false);
+				});
+		}
+
+		void MustAEnn (string typename) {
+			MustAE_general (typename, tname => Type.GetType (tname, null, null));
 		}
 
 		void MustFNFE (string tname) {
@@ -4152,7 +4162,57 @@ namespace MonoTests.System
 			Assert.AreEqual (Type.GetType ("MonoTests.System.Foo`1[System.Int32"), null, "#15");
 		}
 
-#if !MONOTOUCH
+		[Test]
+		public void GetTypeNullDelegatesParseGenericCorrectly () {
+			Assert.AreEqual (Type.GetType ("MonoTests.System.Foo`1", null, null), typeof (Foo<>), "#1");
+			Assert.AreEqual (Type.GetType ("MonoTests.System.Foo`1[System.Int32]", null, null), typeof (Foo<int>), "#2");
+			Assert.AreEqual (Type.GetType ("MonoTests.System.Foo`1[[System.Int32]]", null, null), typeof (Foo<int>), "#3");
+			Assert.AreEqual (Type.GetType ("MonoTests.System.Foo`1[System.Int32][]", null, null), typeof (Foo<int>[]), "#4");
+			Assert.AreEqual (Type.GetType ("MonoTests.System.Foo`1[System.Int32][,]", null, null), typeof (Foo<int>[,]), "#5");
+			Assert.AreEqual (Type.GetType ("MonoTests.System.Foo`1[]", null, null), typeof (Foo<>).MakeArrayType(), "#6");
+			Assert.AreEqual (Type.GetType ("MonoTests.System.Foo`1[,]", null, null), typeof (Foo<>).MakeArrayType (2), "#7");
+			Assert.AreEqual (Type.GetType ("MonoTests.System.Foo`1[][]", null, null), typeof (Foo<>).MakeArrayType ().MakeArrayType (), "#8");
+
+			MustAEnn ("MonoTests.System.Foo`1[][System.Int32]");
+			MustAEnn ("MonoTests.System.Foo`1[");
+			MustAEnn ("MonoTests.System.Foo`1[[");
+			MustAEnn ("MonoTests.System.Foo`1[[]");
+			MustAEnn ("MonoTests.System.Foo`1[,");
+			MustAEnn ("MonoTests.System.Foo`1[*");
+			MustAEnn ("MonoTests.System.Foo`1[System.Int32");
+		}
+
+		Dictionary<int, T> MakeDictHelper<T> (T[] arr) {
+			return new Dictionary<int, T>();
+		}
+
+		[Test]
+		public void GetTypeAnonymousParseCorrectly () {
+			var x = new { X = 1 };
+			var a = new [] { x };
+			var d = MakeDictHelper (a);
+
+			var x_type = x.GetType ();
+			var a_type = a.GetType ();
+			var d_type = d.GetType ();
+
+			Assert.AreEqual (Type.GetType (x_type.ToString ()), x_type, "#1");
+			Assert.AreEqual (Type.GetType (x_type.ToString (), null, null), x_type, "#2");
+			Assert.AreEqual (Type.GetType (a_type.ToString ()), a_type, "#3");
+			Assert.AreEqual (Type.GetType (a_type.ToString (), null, null), a_type, "#4");
+			Assert.AreEqual (Type.GetType (d_type.ToString ()), d_type, "#5");
+			Assert.AreEqual (Type.GetType (d_type.ToString (), null, null), d_type, "#6");
+
+			Assert.AreEqual (Type.GetType (x_type.FullName), x_type, "#7");
+			Assert.AreEqual (Type.GetType (x_type.FullName, null, null), x_type, "#8");
+			Assert.AreEqual (Type.GetType (a_type.FullName), a_type, "#9");
+			Assert.AreEqual (Type.GetType (a_type.FullName, null, null), a_type, "#10");
+			Assert.AreEqual (Type.GetType (d_type.FullName), d_type, "#11");
+			Assert.AreEqual (Type.GetType (d_type.FullName, null, null), d_type, "#12");
+
+		}
+
+#if !MONOTOUCH && !MOBILE_STATIC
 		[Test]
 		[Category ("AndroidNotWorking")] // requires symbol writer
 		public void FullNameGetTypeParseEscapeRoundtrip () // bug #26384

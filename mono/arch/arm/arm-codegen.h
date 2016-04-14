@@ -3,6 +3,7 @@
  * Copyright (c) 2002-2003 Sergey Chaban <serge@wildwestsoftware.com>
  * Copyright 2005-2011 Novell Inc
  * Copyright 2011 Xamarin Inc
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
 
@@ -485,19 +486,15 @@ typedef struct {
 	arminstr_t cond   : 4;
 } ARMInstrMul;
 
-#define ARM_MUL_ID 0
-#define ARM_MUL_ID2 9
-#define ARM_MUL_MASK ((0xF << 24) | (0xF << 4))
-#define ARM_MUL_TAG ((ARM_MUL_ID << 24) | (ARM_MUL_ID2 << 4))
-
+#define ARM_MUL_ID 9
 #define ARM_DEF_MUL_COND(op, rd, rm, rs, rn, s, cond) \
 	(rm)             | \
+	ARM_MUL_ID << 4  | \
 	((rs) << 8)      | \
 	((rn) << 12)     | \
 	((rd) << 16)     | \
-	((s & 1) << 17)  | \
-	((op & 7) << 18) | \
-	ARM_MUL_TAG      | \
+	((s & 1) << 20)  | \
+	((op & 7) << 21) | \
 	ARM_DEF_COND(cond)
 
 /* Rd := (Rm * Rs)[31:0]; 32 x 32 -> 32 */

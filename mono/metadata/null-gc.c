@@ -4,6 +4,7 @@
  * Copyright 2001-2003 Ximian, Inc (http://www.ximian.com)
  * Copyright 2004-2011 Novell, Inc (http://www.novell.com)
  * Copyright 2011 Xamarin, Inc (http://www.xamarin.com)
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
 #include "config.h"
@@ -232,6 +233,18 @@ mono_gc_alloc_string (MonoVTable *vtable, size_t size, gint32 len)
 	obj->chars [len] = 0;
 
 	return obj;
+}
+
+void*
+mono_gc_alloc_mature (MonoVTable *vtable, size_t size)
+{
+	return mono_gc_alloc_obj (vtable, size);
+}
+
+void*
+mono_gc_alloc_pinned_obj (MonoVTable *vtable, size_t size)
+{
+	return mono_gc_alloc_obj (vtable, size);
 }
 
 void

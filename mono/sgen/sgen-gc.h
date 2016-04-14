@@ -6,18 +6,7 @@
  * Copyright 2011 Xamarin Inc (http://www.xamarin.com)
  * Copyright (C) 2012 Xamarin Inc
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
- * License 2.0 as published by the Free Software Foundation;
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Library General Public
- * License 2.0 along with this library; if not, write to the Free
- * Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 #ifndef __MONO_SGENGC_H__
 #define __MONO_SGENGC_H__
@@ -146,12 +135,16 @@ extern int current_collection_generation;
 
 extern unsigned int sgen_global_stop_count;
 
+#define SGEN_ALIGN_UP_TO(val,align)	(((val) + (align - 1)) & ~(align - 1))
+#define SGEN_ALIGN_DOWN_TO(val,align)	((val) & ~(align - 1))
+
 #define SGEN_ALLOC_ALIGN		8
 #define SGEN_ALLOC_ALIGN_BITS	3
 
 /* s must be non-negative */
 #define SGEN_CAN_ALIGN_UP(s)		((s) <= SIZE_MAX - (SGEN_ALLOC_ALIGN - 1))
-#define SGEN_ALIGN_UP(s)		(((s)+(SGEN_ALLOC_ALIGN-1)) & ~(SGEN_ALLOC_ALIGN-1))
+#define SGEN_ALIGN_UP(s)		SGEN_ALIGN_UP_TO(s, SGEN_ALLOC_ALIGN)
+#define SGEN_ALIGN_DOWN(s)		SGEN_ALIGN_DOWN_TO(s, SGEN_ALLOC_ALIGN)
 
 #if SIZEOF_VOID_P == 4
 #define ONE_P 1
@@ -403,12 +396,14 @@ gboolean sgen_is_worker_thread (MonoNativeThreadId thread);
 typedef void (*CopyOrMarkObjectFunc) (GCObject**, SgenGrayQueue*);
 typedef void (*ScanObjectFunc) (GCObject *obj, SgenDescriptor desc, SgenGrayQueue*);
 typedef void (*ScanVTypeFunc) (GCObject *full_object, char *start, SgenDescriptor desc, SgenGrayQueue* BINARY_PROTOCOL_ARG (size_t size));
+typedef void (*ScanPtrFieldFunc) (GCObject *obj, GCObject **ptr, SgenGrayQueue* queue);
 typedef gboolean (*DrainGrayStackFunc) (SgenGrayQueue *queue);
 
 typedef struct {
 	CopyOrMarkObjectFunc copy_or_mark_object;
 	ScanObjectFunc scan_object;
 	ScanVTypeFunc scan_vtype;
+	ScanPtrFieldFunc scan_ptr_field;
 	/* Drain stack optimized for the above functions */
 	DrainGrayStackFunc drain_gray_stack;
 	/*FIXME add allocation function? */
@@ -591,6 +586,12 @@ typedef struct
 	size_t num_unique_scanned_objects;
 } ScannedObjectCounts;
 
+typedef enum {
+	CARDTABLE_SCAN_GLOBAL = 0,
+	CARDTABLE_SCAN_MOD_UNION = 1,
+	CARDTABLE_SCAN_MOD_UNION_PRECLEAN = CARDTABLE_SCAN_MOD_UNION | 2,
+} CardTableScanType;
+
 typedef struct _SgenMajorCollector SgenMajorCollector;
 struct _SgenMajorCollector {
 	size_t section_size;
@@ -620,7 +621,7 @@ struct _SgenMajorCollector {
 	void (*free_non_pinned_object) (GCObject *obj, size_t size);
 	void (*pin_objects) (SgenGrayQueue *queue);
 	void (*pin_major_object) (GCObject *obj, SgenGrayQueue *queue);
-	void (*scan_card_table) (gboolean mod_union, ScanCopyContext ctx);
+	void (*scan_card_table) (CardTableScanType scan_type, ScanCopyContext ctx);
 	void (*iterate_live_block_ranges) (sgen_cardtable_block_callback callback);
 	void (*update_cardtable_mod_union) (void);
 	void (*init_to_space) (void);
@@ -798,7 +799,7 @@ enum {
 void sgen_pin_object (GCObject *object, SgenGrayQueue *queue);
 void sgen_set_pinned_from_failed_allocation (mword objsize);
 
-void sgen_ensure_free_space (size_t size);
+void sgen_ensure_free_space (size_t size, int generation);
 void sgen_gc_collect (int generation);
 void sgen_perform_collection (size_t requested_size, int generation_to_collect, const char *reason, gboolean wait_to_finish);
 
@@ -846,7 +847,7 @@ void sgen_los_sweep (void);
 gboolean sgen_ptr_is_in_los (char *ptr, char **start);
 void sgen_los_iterate_objects (IterateObjectCallbackFunc cb, void *user_data);
 void sgen_los_iterate_live_block_ranges (sgen_cardtable_block_callback callback);
-void sgen_los_scan_card_table (gboolean mod_union, ScanCopyContext ctx);
+void sgen_los_scan_card_table (CardTableScanType scan_type, ScanCopyContext ctx);
 void sgen_los_update_cardtable_mod_union (void);
 void sgen_los_count_cards (long long *num_total_cards, long long *num_marked_cards);
 gboolean sgen_los_is_valid_object (char *object);

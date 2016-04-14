@@ -6,18 +6,7 @@
  * Copyright 2003-2010 Novell, Inc.
  * Copyright (C) 2012 Xamarin Inc
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
- * License 2.0 as published by the Free Software Foundation;
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Library General Public
- * License 2.0 along with this library; if not, write to the Free
- * Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
 #ifdef HAVE_SGEN_GC
@@ -99,6 +88,9 @@ binary_protocol_open_file (void)
 			break; /* Failed */
 	} while (binary_protocol_file == -1);
 
+	if (binary_protocol_file == -1)
+		g_error ("sgen binary protocol: failed to open file");
+
 	if (file_size_limit > 0)
 		free_filename (filename);
 }
@@ -114,6 +106,8 @@ binary_protocol_init (const char *filename, long long limit)
 	file_size_limit = limit;
 
 	binary_protocol_open_file ();
+#else
+	g_error ("sgen binary protocol: not supported");
 #endif
 }
 

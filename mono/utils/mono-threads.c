@@ -6,6 +6,7 @@
  *
  * Copyright 2011 Novell, Inc (http://www.novell.com)
  * Copyright 2011 Xamarin, Inc (http://www.xamarin.com)
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
 #include <config.h>
@@ -187,7 +188,6 @@ mono_threads_end_global_suspend (void)
 static void
 dump_threads (void)
 {
-	MonoThreadInfo *info;
 	MonoThreadInfo *cur = mono_thread_info_current ();
 
 	MOSTLY_ASYNC_SAFE_PRINTF ("STATE CUE CARD: (? means a positive number, usually 1 or 2, * means any number)\n");
@@ -210,8 +210,7 @@ dump_threads (void)
 #else
 		MOSTLY_ASYNC_SAFE_PRINTF ("--thread %p id %p [%p] state %x  %s\n", info, (void *) mono_thread_info_get_tid (info), (void*)(size_t)info->native_handle, info->thread_state, info == cur ? "GC INITIATOR" : "" );
 #endif
-
-	} END_FOREACH_THREAD_SAFE
+	} FOREACH_THREAD_SAFE_END
 }
 
 gboolean
@@ -271,7 +270,7 @@ mono_thread_info_lookup (MonoNativeThreadId id)
 {
 		MonoThreadHazardPointers *hp = mono_hazard_pointer_get ();
 
-	if (!mono_lls_find (&thread_list, hp, (uintptr_t)id)) {
+	if (!mono_lls_find (&thread_list, hp, (uintptr_t)id, HAZARD_FREE_ASYNC_CTX)) {
 		mono_hazard_pointer_clear_all (hp, -1);
 		return NULL;
 	} 
@@ -285,7 +284,7 @@ mono_thread_info_insert (MonoThreadInfo *info)
 {
 	MonoThreadHazardPointers *hp = mono_hazard_pointer_get ();
 
-	if (!mono_lls_insert (&thread_list, hp, (MonoLinkedListSetNode*)info)) {
+	if (!mono_lls_insert (&thread_list, hp, (MonoLinkedListSetNode*)info, HAZARD_FREE_SAFE_CTX)) {
 		mono_hazard_pointer_clear_all (hp, -1);
 		return FALSE;
 	} 
@@ -301,7 +300,7 @@ mono_thread_info_remove (MonoThreadInfo *info)
 	gboolean res;
 
 	THREADS_DEBUG ("removing info %p\n", info);
-	res = mono_lls_remove (&thread_list, hp, (MonoLinkedListSetNode*)info);
+	res = mono_lls_remove (&thread_list, hp, (MonoLinkedListSetNode*)info, HAZARD_FREE_SAFE_CTX);
 	mono_hazard_pointer_clear_all (hp, -1);
 	return res;
 }
@@ -426,7 +425,10 @@ unregister_thread (void *arg)
 	g_byte_array_free (info->stackdata, /*free_segment=*/TRUE);
 
 	/*now it's safe to free the thread info.*/
-	mono_thread_hazardous_free_or_queue (info, free_thread_info, TRUE, FALSE);
+	mono_thread_hazardous_try_free (info, free_thread_info);
+	/* Pump the HP queue */
+	mono_thread_hazardous_try_free_some ();
+
 	mono_thread_small_id_free (small_id);
 }
 
@@ -540,7 +542,7 @@ mono_threads_attach_tools_thread (void)
 	g_assert (!mono_native_tls_get_value (thread_info_key));
 	
 	while (!mono_threads_inited) { 
-		g_usleep (10);
+		mono_thread_info_usleep (10);
 	}
 
 	info = mono_thread_info_attach (&dummy);
@@ -637,7 +639,7 @@ mono_threads_init (MonoThreadInfoCallbacks *callbacks, size_t info_size)
 	mono_coop_sem_init (&global_suspend_semaphore, 1);
 	mono_os_sem_init (&suspend_semaphore, 0);
 
-	mono_lls_init (&thread_list, NULL);
+	mono_lls_init (&thread_list, NULL, HAZARD_FREE_NO_LOCK);
 	mono_thread_smr_init ();
 	mono_threads_init_platform ();
 	mono_threads_init_coop ();
@@ -772,16 +774,17 @@ cleanup:
 }
 
 gboolean
-mono_thread_info_begin_suspend (MonoThreadInfo *info, gboolean interrupt_kernel)
+mono_thread_info_begin_suspend (MonoThreadInfo *info)
 {
 	switch (mono_threads_transition_request_async_suspension (info)) {
 	case AsyncSuspendAlreadySuspended:
+	case AsyncSuspendBlocking:
 		return TRUE;
 	case AsyncSuspendWait:
 		mono_threads_add_to_pending_operation_set (info);
 		return TRUE;
 	case AsyncSuspendInitSuspend:
-		return begin_async_suspend (info, interrupt_kernel);
+		return begin_async_suspend (info, FALSE);
 	default:
 		g_assert_not_reached ();
 	}
@@ -871,6 +874,14 @@ suspend_sync (MonoNativeThreadId tid, gboolean interrupt_kernel)
 			mono_hazard_pointer_clear (hp, 1);
 			return NULL;
 		}
+		break;
+	case AsyncSuspendBlocking:
+		if (interrupt_kernel)
+			mono_threads_core_abort_syscall (info);
+
+		break;
+	default:
+		g_assert_not_reached ();
 	}
 
 	//Wait for the pending suspend to finish
@@ -1124,35 +1135,35 @@ sleep_interrupt (gpointer data)
 static inline guint32
 sleep_interruptable (guint32 ms, gboolean *alerted)
 {
-	guint32 start, now, end;
+	gint64 now, end;
 
 	g_assert (INFINITE == G_MAXUINT32);
 
 	g_assert (alerted);
 	*alerted = FALSE;
 
-	start = mono_msec_ticks ();
-
-	if (start < G_MAXUINT32 - ms) {
-		end = start + ms;
-	} else {
-		/* start + ms would overflow guint32 */
-		end = G_MAXUINT32;
-	}
+	if (ms != INFINITE)
+		end = mono_100ns_ticks () + (ms * 1000 * 10);
 
 	mono_lazy_initialize (&sleep_init, sleep_initialize);
 
 	mono_coop_mutex_lock (&sleep_mutex);
 
-	for (now = mono_msec_ticks (); ms == INFINITE || now - start < ms; now = mono_msec_ticks ()) {
+	for (;;) {
+		if (ms != INFINITE) {
+			now = mono_100ns_ticks ();
+			if (now > end)
+				break;
+		}
+
 		mono_thread_info_install_interrupt (sleep_interrupt, NULL, alerted);
 		if (*alerted) {
 			mono_coop_mutex_unlock (&sleep_mutex);
 			return WAIT_IO_COMPLETION;
 		}
 
-		if (ms < INFINITE)
-			mono_coop_cond_timedwait (&sleep_cond, &sleep_mutex, end - now);
+		if (ms != INFINITE)
+			mono_coop_cond_timedwait (&sleep_cond, &sleep_mutex, (end - now) / 10 / 1000);
 		else
 			mono_coop_cond_wait (&sleep_cond, &sleep_mutex);
 
@@ -1507,28 +1518,4 @@ mono_thread_info_describe_interrupt_token (MonoThreadInfo *info, GString *text)
 		g_string_append_printf (text, "interrupted state");
 	else
 		g_string_append_printf (text, "waiting");
-}
-
-/* info must be self or be held in a hazard pointer. */
-gboolean
-mono_threads_add_async_job (MonoThreadInfo *info, MonoAsyncJob job)
-{
-	MonoAsyncJob old_job;
-	do {
-		old_job = (MonoAsyncJob) info->service_requests;
-		if (old_job & job)
-			return FALSE;
-	} while (InterlockedCompareExchange (&info->service_requests, old_job | job, old_job) != old_job);
-	return TRUE;
-}
-
-MonoAsyncJob
-mono_threads_consume_async_jobs (void)
-{
-	MonoThreadInfo *info = (MonoThreadInfo*)mono_native_tls_get_value (thread_info_key);
-
-	if (!info)
-		return (MonoAsyncJob) 0;
-
-	return (MonoAsyncJob) InterlockedExchange (&info->service_requests, 0);
 }

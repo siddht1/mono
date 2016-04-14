@@ -6,18 +6,7 @@
  * Copyright 2011 Xamarin Inc (http://www.xamarin.com)
  * Copyright (C) 2012 Xamarin Inc
  *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Library General Public
- * License 2.0 as published by the Free Software Foundation;
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Library General Public License for more details.
- *
- * You should have received a copy of the GNU Library General Public
- * License 2.0 along with this library; if not, write to the Free
- * Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 #include "config.h"
 #ifdef HAVE_SGEN_GC
@@ -123,10 +112,7 @@ mono_gc_make_descr_for_object (gsize *bitmap, int numbits, size_t obj_size)
 {
 	int first_set = -1, num_set = 0, last_set = -1, i;
 	SgenDescriptor desc = 0;
-	size_t stored_size = obj_size;
-
-	stored_size += SGEN_ALLOC_ALIGN - 1;
-	stored_size &= ~(SGEN_ALLOC_ALIGN - 1);
+	size_t stored_size = SGEN_ALIGN_UP (obj_size);
 
 	for (i = 0; i < numbits; ++i) {
 		if (bitmap [i / GC_BITS_PER_WORD] & ((gsize)1 << (i % GC_BITS_PER_WORD))) {

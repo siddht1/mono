@@ -7,6 +7,7 @@
  *
  * (C) 2001 Ximian, Inc
  * (C) Copyright 2002-2006 Novell, Inc
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
 #ifndef _MONO_METADATA_THREADS_TYPES_H_
@@ -95,10 +96,10 @@ gboolean ves_icall_System_Threading_Events_ResetEvent_internal (HANDLE handle);
 void ves_icall_System_Threading_Events_CloseEvent_internal (HANDLE handle);
 HANDLE ves_icall_System_Threading_Events_OpenEvent_internal (MonoString *name, gint32 rights, gint32 *error);
 
-gboolean ves_icall_System_Threading_WaitHandle_WaitAll_internal(MonoArray *mono_handles, gint32 ms, gboolean exitContext);
+gint32 ves_icall_System_Threading_WaitHandle_WaitAll_internal(MonoArray *mono_handles, gint32 ms, gboolean exitContext);
 gint32 ves_icall_System_Threading_WaitHandle_WaitAny_internal(MonoArray *mono_handles, gint32 ms, gboolean exitContext);
-gboolean ves_icall_System_Threading_WaitHandle_WaitOne_internal(MonoObject *this_obj, HANDLE handle, gint32 ms, gboolean exitContext);
-gboolean ves_icall_System_Threading_WaitHandle_SignalAndWait_Internal (HANDLE toSignal, HANDLE toWait, gint32 ms, gboolean exitContext);
+gint32 ves_icall_System_Threading_WaitHandle_WaitOne_internal(HANDLE handle, gint32 ms, gboolean exitContext);
+gint32 ves_icall_System_Threading_WaitHandle_SignalAndWait_Internal (HANDLE toSignal, HANDLE toWait, gint32 ms, gboolean exitContext);
 
 MonoArray* ves_icall_System_Threading_Thread_ByteArrayToRootDomain (MonoArray *arr);
 MonoArray* ves_icall_System_Threading_Thread_ByteArrayToCurrentDomain (MonoArray *arr);
@@ -217,9 +218,7 @@ MONO_API MonoException* mono_thread_get_undeniable_exception (void);
 
 MonoException* mono_thread_get_and_clear_pending_exception (void);
 
-void mono_thread_set_name_internal (MonoInternalThread *this_obj, MonoString *name, gboolean managed);
-
-void mono_threads_install_notify_pending_exc (MonoThreadNotifyPendingExcFunc func);
+void mono_thread_set_name_internal (MonoInternalThread *this_obj, MonoString *name, gboolean managed, MonoError *error);
 
 void mono_runtime_set_has_tls_get (gboolean val);
 gboolean mono_runtime_has_tls_get (void);
@@ -237,7 +236,6 @@ MonoException* mono_thread_request_interruption (mono_bool running_managed);
 gboolean mono_thread_interruption_requested (void);
 MonoException* mono_thread_interruption_checkpoint (void);
 MonoException* mono_thread_force_interruption_checkpoint_noraise (void);
-void mono_thread_force_interruption_checkpoint (void);
 gint32* mono_thread_interruption_request_flag (void);
 
 uint32_t mono_alloc_special_static_data (uint32_t static_type, uint32_t size, uint32_t align, uintptr_t *bitmap, int numbits);
@@ -246,7 +244,9 @@ gpointer mono_get_special_static_data_for_thread (MonoInternalThread *thread, gu
 
 MonoException* mono_thread_resume_interruption (void);
 void mono_threads_perform_thread_dump (void);
-MonoThread *mono_thread_attach_full (MonoDomain *domain, gboolean force_attach);
+
+MonoThread *
+mono_thread_attach_full (MonoDomain *domain, gboolean force_attach, MonoError *error);
 
 void mono_thread_init_tls (void);
 

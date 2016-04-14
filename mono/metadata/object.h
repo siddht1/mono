@@ -31,7 +31,7 @@ typedef struct _MonoObject {
 	MonoThreadsSync *synchronisation;
 } MonoObject;
 
-typedef MonoObject* (*MonoInvokeFunc)	     (MonoMethod *method, void *obj, void **params, MonoObject **exc);
+typedef MonoObject* (*MonoInvokeFunc)	     (MonoMethod *method, void *obj, void **params, MonoObject **exc, MonoError *error);
 typedef void*    (*MonoCompileFunc)	     (MonoMethod *method);
 typedef void	    (*MonoMainThreadFunc)    (void* user_data);
 
@@ -69,7 +69,7 @@ typedef void	    (*MonoMainThreadFunc)    (void* user_data);
 MONO_API mono_unichar2 *mono_string_chars  (MonoString *s);
 MONO_API int            mono_string_length (MonoString *s);
 
-MONO_API MonoObject *
+MONO_RT_EXTERNAL_ONLY MONO_API MonoObject *
 mono_object_new		    (MonoDomain *domain, MonoClass *klass);
 
 MONO_API MonoObject *
@@ -116,6 +116,7 @@ mono_ldstr		    (MonoDomain *domain, MonoImage *image, uint32_t str_index);
 MONO_API MonoString*
 mono_string_is_interned	    (MonoString *str);
 
+MONO_RT_EXTERNAL_ONLY
 MONO_API MonoString*
 mono_string_intern	    (MonoString *str);
 
@@ -161,6 +162,7 @@ mono_object_hash            (MonoObject* obj);
 MONO_API MonoString *
 mono_object_to_string (MonoObject *obj, MonoObject **exc);
 
+MONO_RT_EXTERNAL_ONLY
 MONO_API MonoObject *
 mono_value_box		    (MonoDomain *domain, MonoClass *klass, void* val);
 
@@ -182,12 +184,15 @@ mono_object_unbox	    (MonoObject *obj);
 MONO_API MonoObject *
 mono_object_clone	    (MonoObject *obj);
 
+MONO_RT_EXTERNAL_ONLY
 MONO_API MonoObject *
 mono_object_isinst	    (MonoObject *obj, MonoClass *klass);
 
+MONO_RT_EXTERNAL_ONLY
 MONO_API MonoObject *
 mono_object_isinst_mbyref   (MonoObject *obj, MonoClass *klass);
 
+MONO_RT_EXTERNAL_ONLY
 MONO_API MonoObject *
 mono_object_castclass_mbyref (MonoObject *obj, MonoClass *klass);
 
@@ -209,15 +214,18 @@ mono_monitor_exit            (MonoObject *obj);
 MONO_API void
 mono_raise_exception	    (MonoException *ex);
 
+MONO_RT_EXTERNAL_ONLY
 MONO_API void
 mono_runtime_object_init    (MonoObject *this_obj);
 
+MONO_RT_EXTERNAL_ONLY
 MONO_API void
 mono_runtime_class_init	    (MonoVTable *vtable);
 
 MONO_API MonoMethod*
 mono_object_get_virtual_method (MonoObject *obj, MonoMethod *method);
 
+MONO_RT_EXTERNAL_ONLY
 MONO_API MonoObject*
 mono_runtime_invoke	    (MonoMethod *method, void *obj, void **params,
 			     MonoObject **exc);
@@ -299,6 +307,7 @@ mono_field_get_value (MonoObject *obj, MonoClassField *field, void *value);
 MONO_API void
 mono_field_static_get_value (MonoVTable *vt, MonoClassField *field, void *value);
 
+MONO_RT_EXTERNAL_ONLY
 MONO_API MonoObject *
 mono_field_get_value_object (MonoDomain *domain, MonoClassField *field, MonoObject *obj);
 

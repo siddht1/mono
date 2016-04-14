@@ -9,6 +9,7 @@
  * Copyright 2003 Ximian, Inc.
  * Copyright 2003-2011 Novell Inc.
  * Copyright 2011 Xamarin Inc.
+ * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 #include "mini.h"
 #include <string.h>
@@ -178,49 +179,6 @@ mono_x86_patch (unsigned char* code, gpointer target)
 {
 	x86_patch (code, (unsigned char*)target);
 }
-
-typedef enum {
-	ArgInIReg,
-	ArgInFloatSSEReg,
-	ArgInDoubleSSEReg,
-	ArgOnStack,
-	ArgValuetypeInReg,
-	ArgOnFloatFpStack,
-	ArgOnDoubleFpStack,
-	/* gsharedvt argument passed by addr */
-	ArgGSharedVt,
-	ArgNone
-} ArgStorage;
-
-typedef struct {
-	gint16 offset;
-	gint8  reg;
-	ArgStorage storage;
-	int nslots;
-	gboolean is_pair;
-
-	/* Only if storage == ArgValuetypeInReg */
-	ArgStorage pair_storage [2];
-	gint8 pair_regs [2];
-} ArgInfo;
-
-typedef struct {
-	int nargs;
-	guint32 stack_usage;
-	guint32 reg_usage;
-	guint32 freg_usage;
-	gboolean need_stack_align;
-	guint32 stack_align_amount;
-	gboolean vtype_retaddr;
-	/* The index of the vret arg in the argument list */
-	int vret_arg_index;
-	int vret_arg_offset;
-	/* Argument space popped by the callee */
-	int callee_stack_pop;
-	ArgInfo ret;
-	ArgInfo sig_cookie;
-	ArgInfo args [1];
-} CallInfo;
 
 #define FLOAT_PARAM_REGS 0
 
@@ -761,7 +719,7 @@ mono_arch_init (void)
 
 	mono_aot_register_jit_icall ("mono_x86_throw_exception", mono_x86_throw_exception);
 	mono_aot_register_jit_icall ("mono_x86_throw_corlib_exception", mono_x86_throw_corlib_exception);
-#if defined(ENABLE_GSHAREDVT)
+#if defined(MONO_ARCH_GSHAREDVT_SUPPORTED)
 	mono_aot_register_jit_icall ("mono_x86_start_gsharedvt_call", mono_x86_start_gsharedvt_call);
 #endif
 }
@@ -1052,7 +1010,9 @@ mono_arch_allocate_vars (MonoCompile *cfg)
 	header = cfg->header;
 	sig = mono_method_signature (cfg->method);
 
-	cinfo = get_call_info (cfg->mempool, sig);
+	if (!cfg->arch.cinfo)
+		cfg->arch.cinfo = get_call_info (cfg->mempool, sig);
+	cinfo = (CallInfo *)cfg->arch.cinfo;
 
 	cfg->frame_reg = X86_EBP;
 	offset = 0;
@@ -1096,8 +1056,7 @@ mono_arch_allocate_vars (MonoCompile *cfg)
 	offsets = mono_allocate_stack_slots (cfg, TRUE, &locals_stack_size, &locals_stack_align);
 	if (locals_stack_size > MONO_ARCH_MAX_FRAME_SIZE) {
 		char *mname = mono_method_full_name (cfg->method, TRUE);
-		cfg->exception_type = MONO_EXCEPTION_INVALID_PROGRAM;
-		cfg->exception_message = g_strdup_printf ("Method %s stack is too big.", mname);
+		mono_cfg_set_exception_invalid_program (cfg, g_strdup_printf ("Method %s stack is too big.", mname));
 		g_free (mname);
 		return;
 	}
@@ -1183,8 +1142,8 @@ mono_arch_allocate_vars (MonoCompile *cfg)
 		if (inst->opcode != OP_REGVAR) {
 			inst->opcode = OP_REGOFFSET;
 			inst->inst_basereg = X86_EBP;
+			inst->inst_offset = ainfo->offset + ARGS_OFFSET;
 		}
-		inst->inst_offset = ainfo->offset + ARGS_OFFSET;
 	}
 
 	cfg->stack_offset = offset;
@@ -1199,7 +1158,10 @@ mono_arch_create_vars (MonoCompile *cfg)
 
 	sig = mono_method_signature (cfg->method);
 
-	cinfo = get_call_info (cfg->mempool, sig);
+	if (!cfg->arch.cinfo)
+		cfg->arch.cinfo = get_call_info (cfg->mempool, sig);
+	cinfo = (CallInfo *)cfg->arch.cinfo;
+
 	sig_ret = mini_get_underlying_type (sig->ret);
 
 	if (cinfo->ret.storage == ArgValuetypeInReg)
@@ -1537,8 +1499,8 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 						MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORER8_MEMBASE_REG, X86_ESP, ainfo->offset, in->dreg);
 						argsize = 8;
 					} else if (t->type == MONO_TYPE_I8 || t->type == MONO_TYPE_U8) {
-						MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORE_MEMBASE_REG, X86_ESP, ainfo->offset + 4, in->dreg + 2);
-						MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORE_MEMBASE_REG, X86_ESP, ainfo->offset, in->dreg + 1);
+						MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORE_MEMBASE_REG, X86_ESP, ainfo->offset + 4, MONO_LVREG_MS (in->dreg));
+						MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORE_MEMBASE_REG, X86_ESP, ainfo->offset, MONO_LVREG_LS (in->dreg));
 						argsize = 4;
 					} else {
 						MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORE_MEMBASE_REG, X86_ESP, ainfo->offset, in->dreg);
@@ -1674,8 +1636,8 @@ mono_arch_emit_setret (MonoCompile *cfg, MonoMethod *method, MonoInst *val)
 			if (COMPILE_LLVM (cfg))
 				MONO_EMIT_NEW_UNALU (cfg, OP_LMOVE, cfg->ret->dreg, val->dreg);
 			else {
-				MONO_EMIT_NEW_UNALU (cfg, OP_MOVE, X86_EAX, val->dreg + 1);
-				MONO_EMIT_NEW_UNALU (cfg, OP_MOVE, X86_EDX, val->dreg + 2);
+				MONO_EMIT_NEW_UNALU (cfg, OP_MOVE, X86_EAX, MONO_LVREG_LS (val->dreg));
+				MONO_EMIT_NEW_UNALU (cfg, OP_MOVE, X86_EDX, MONO_LVREG_MS (val->dreg));
 			}
 			return;
 		}
@@ -2475,26 +2437,6 @@ emit_setup_lmf (MonoCompile *cfg, guint8 *code, gint32 lmf_offset, int cfa_offse
 
 	return code;
 }
-
-#define REAL_PRINT_REG(text,reg) \
-mono_assert (reg >= 0); \
-x86_push_reg (code, X86_EAX); \
-x86_push_reg (code, X86_EDX); \
-x86_push_reg (code, X86_ECX); \
-x86_push_reg (code, reg); \
-x86_push_imm (code, reg); \
-x86_push_imm (code, text " %d %p\n"); \
-x86_mov_reg_imm (code, X86_EAX, printf); \
-x86_call_reg (code, X86_EAX); \
-x86_alu_reg_imm (code, X86_ADD, X86_ESP, 3*4); \
-x86_pop_reg (code, X86_ECX); \
-x86_pop_reg (code, X86_EDX); \
-x86_pop_reg (code, X86_EAX);
-
-/* REAL_PRINT_REG does not appear to be used, and was not adapted to work with Native Client. */
-#ifdef __native__client_codegen__
-#define REAL_PRINT_REG(text, reg) g_assert_not_reached()
-#endif
 
 /* benchmark and set based on cpu */
 #define LOOP_ALIGNMENT 8
@@ -4233,7 +4175,7 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			x86_branch8 (code, X86_CC_NE, 0, FALSE);
 
 			x86_fstp (code, 0);			
-			EMIT_COND_SYSTEM_EXCEPTION (X86_CC_EQ, FALSE, "ArithmeticException");
+			EMIT_COND_SYSTEM_EXCEPTION (X86_CC_EQ, FALSE, "OverflowException");
 
 			x86_patch (br1, code);
 			break;
@@ -5131,9 +5073,6 @@ mono_arch_patch_code_new (MonoCompile *cfg, MonoDomain *domain, guint8 *code, Mo
 	case MONO_PATCH_INFO_BB:
 	case MONO_PATCH_INFO_LABEL:
 	case MONO_PATCH_INFO_RGCTX_FETCH:
-	case MONO_PATCH_INFO_MONITOR_ENTER:
-	case MONO_PATCH_INFO_MONITOR_ENTER_V4:
-	case MONO_PATCH_INFO_MONITOR_EXIT:
 	case MONO_PATCH_INFO_JIT_ICALL_ADDR:
 #if defined(__native_client_codegen__) && defined(__native_client__)
 		if (nacl_is_code_address (code)) {
@@ -5194,6 +5133,8 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 	MonoBasicBlock *bb;
 	MonoMethodSignature *sig;
 	MonoInst *inst;
+	CallInfo *cinfo;
+	ArgInfo *ainfo;
 	int alloc_size, pos, max_offset, i, cfa_offset;
 	guint8 *code;
 	gboolean need_stack_frame;
@@ -5453,11 +5394,14 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 	sig = mono_method_signature (method);
 	pos = 0;
 
+	cinfo = (CallInfo *)cfg->arch.cinfo;
+
 	for (i = 0; i < sig->param_count + sig->hasthis; ++i) {
 		inst = cfg->args [pos];
+		ainfo = &cinfo->args [pos];
 		if (inst->opcode == OP_REGVAR) {
 			g_assert (need_stack_frame);
-			x86_mov_reg_membase (code, inst->dreg, X86_EBP, inst->inst_offset, 4);
+			x86_mov_reg_membase (code, inst->dreg, X86_EBP, ainfo->offset + ARGS_OFFSET, 4);
 			if (cfg->verbose_level > 2)
 				g_print ("Argument %d assigned to register %s\n", pos, mono_arch_regname (inst->dreg));
 		}
@@ -5579,7 +5523,7 @@ mono_arch_emit_epilog (MonoCompile *cfg)
 	}
 
 	/* Load returned vtypes into registers if needed */
-	cinfo = get_call_info (cfg->mempool, sig);
+	cinfo = (CallInfo *)cfg->arch.cinfo;
 	if (cinfo->ret.storage == ArgValuetypeInReg) {
 		for (quad = 0; quad < 2; quad ++) {
 			switch (cinfo->ret.pair_storage [quad]) {
@@ -5668,8 +5612,7 @@ mono_arch_emit_exceptions (MonoCompile *cfg)
 
 			x86_patch (patch_info->ip.i + cfg->native_code, code);
 
-			exc_class = mono_class_from_name (mono_defaults.corlib, "System", patch_info->data.name);
-			g_assert (exc_class);
+			exc_class = mono_class_load_from_name (mono_defaults.corlib, "System", patch_info->data.name);
 			throw_ip = patch_info->ip.i;
 
 			/* Find a throw sequence for the same exception class */
@@ -6486,9 +6429,9 @@ mono_arch_decompose_long_opts (MonoCompile *cfg, MonoInst *long_ins)
 
 	if (long_ins->opcode == OP_LNEG) {
 		ins = long_ins;
-		MONO_EMIT_NEW_UNALU (cfg, OP_INEG, ins->dreg + 1, ins->sreg1 + 1);
-		MONO_EMIT_NEW_BIALU_IMM (cfg, OP_ADC_IMM, ins->dreg + 2, ins->sreg1 + 2, 0);
-		MONO_EMIT_NEW_UNALU (cfg, OP_INEG, ins->dreg + 2, ins->dreg + 2);
+		MONO_EMIT_NEW_UNALU (cfg, OP_INEG, MONO_LVREG_LS (ins->dreg), MONO_LVREG_LS (ins->sreg1));
+		MONO_EMIT_NEW_BIALU_IMM (cfg, OP_ADC_IMM, MONO_LVREG_MS (ins->dreg), MONO_LVREG_MS (ins->sreg1), 0);
+		MONO_EMIT_NEW_UNALU (cfg, OP_INEG, MONO_LVREG_MS (ins->dreg), MONO_LVREG_MS (ins->dreg));
 		NULLIFY_INS (ins);
 		return;
 	}
@@ -6517,7 +6460,7 @@ mono_arch_decompose_long_opts (MonoCompile *cfg, MonoInst *long_ins)
 		ins->klass = mono_defaults.int32_class;
 		ins->sreg1 = vreg;
 		ins->type = STACK_I4;
-		ins->dreg = long_ins->dreg + 1;
+		ins->dreg = MONO_LVREG_LS (long_ins->dreg);
 		MONO_ADD_INS (cfg->cbb, ins);
 	
 		MONO_INST_NEW (cfg, ins, OP_PSHUFLED);
@@ -6532,7 +6475,7 @@ mono_arch_decompose_long_opts (MonoCompile *cfg, MonoInst *long_ins)
 		ins->klass = mono_defaults.int32_class;
 		ins->sreg1 = vreg;
 		ins->type = STACK_I4;
-		ins->dreg = long_ins->dreg + 2;
+		ins->dreg = MONO_LVREG_MS (long_ins->dreg);
 		MONO_ADD_INS (cfg->cbb, ins);
 	
 		long_ins->opcode = OP_NOP;
@@ -6541,14 +6484,14 @@ mono_arch_decompose_long_opts (MonoCompile *cfg, MonoInst *long_ins)
 		MONO_INST_NEW (cfg, ins, OP_INSERTX_I4_SLOW);
 		ins->dreg = long_ins->dreg;
 		ins->sreg1 = long_ins->dreg;
-		ins->sreg2 = long_ins->sreg2 + 1;
+		ins->sreg2 = MONO_LVREG_LS (long_ins->sreg2);
 		ins->inst_c0 = long_ins->inst_c0 * 2;
 		MONO_ADD_INS (cfg->cbb, ins);
 
 		MONO_INST_NEW (cfg, ins, OP_INSERTX_I4_SLOW);
 		ins->dreg = long_ins->dreg;
 		ins->sreg1 = long_ins->dreg;
-		ins->sreg2 = long_ins->sreg2 + 2;
+		ins->sreg2 = MONO_LVREG_MS (long_ins->sreg2);
 		ins->inst_c0 = long_ins->inst_c0 * 2 + 1;
 		MONO_ADD_INS (cfg->cbb, ins);
 
@@ -6557,7 +6500,7 @@ mono_arch_decompose_long_opts (MonoCompile *cfg, MonoInst *long_ins)
 	case OP_EXPAND_I8:
 		MONO_INST_NEW (cfg, ins, OP_ICONV_TO_X);
 		ins->dreg = long_ins->dreg;
-		ins->sreg1 = long_ins->sreg1 + 1;
+		ins->sreg1 = MONO_LVREG_LS (long_ins->sreg1);
 		ins->klass = long_ins->klass;
 		ins->type = STACK_VTYPE;
 		MONO_ADD_INS (cfg->cbb, ins);
@@ -6565,7 +6508,7 @@ mono_arch_decompose_long_opts (MonoCompile *cfg, MonoInst *long_ins)
 		MONO_INST_NEW (cfg, ins, OP_INSERTX_I4_SLOW);
 		ins->dreg = long_ins->dreg;
 		ins->sreg1 = long_ins->dreg;
-		ins->sreg2 = long_ins->sreg1 + 2;
+		ins->sreg2 = MONO_LVREG_MS (long_ins->sreg1);
 		ins->inst_c0 = 1;
 		ins->klass = long_ins->klass;
 		ins->type = STACK_VTYPE;
@@ -6831,8 +6774,8 @@ mono_arch_opcode_supported (int opcode)
 	}
 }
 
-#if defined(ENABLE_GSHAREDVT)
-
-#include "../../../mono-extensions/mono/mini/mini-x86-gsharedvt.c"
-
-#endif /* !MONOTOUCH */
+CallInfo*
+mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig)
+{
+	return get_call_info (mp, sig);
+}
